@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues tracked in GitHub Issues (TheShuEd/RobustToolboxEditor), via `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues tracked in GitHub Issues (`crystallpunk-14/SS14Editor`), via the GitHub MCP server — the `gh` CLI is not installed. See `docs/agents/issue-tracker.md`.
 
 ### Domain docs
 
