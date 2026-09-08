@@ -1,0 +1,993 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>ПРОТОТИП (выброс) — Резолв наследования прототипов SS14</title>
+<style>
+  :root {
+    --accent: #7c5cff;
+    --bg: #14161c;
+    --panel: #1c1f28;
+    --border: #2c303c;
+    --text: #e6e6ea;
+    --dim: #8b8fa3;
+    --own: #7c5cff;
+    --p0: #4fc3a1;
+    --p1: #e0a537;
+    --p2: #e0537a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.5;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .badge {
+    display: inline-block; font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+    background: #3a2a52; color: #cbb6ff; padding: 3px 8px; border-radius: 4px; margin-bottom: 12px;
+  }
+  .intro { color: var(--dim); font-size: 14px; margin-bottom: 24px; max-width: 760px; }
+  .intro b { color: var(--text); }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+  .tab {
+    background: var(--panel); border: 1px solid var(--border); color: var(--dim);
+    padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  .tab.active { border-color: var(--accent); color: var(--text); background: #23172f; }
+  .scenario-desc { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 16px; font-size: 13.5px; }
+  .scenario-desc code { background: #0e0f14; padding: 1px 5px; border-radius: 3px; }
+  .steps { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  .step-btn {
+    background: #262a36; border: 1px solid var(--border); color: var(--text);
+    padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  .step-btn:hover { border-color: var(--accent); }
+  .step-btn:disabled { opacity: .35; cursor: default; }
+  .step-btn.current { border-color: var(--accent); background: #2a2040; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .panel h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .03em; color: var(--dim); }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  table.fields { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.fields td { padding: 5px 6px; border-bottom: 1px solid #23262f; vertical-align: top; }
+  table.fields td.key { color: var(--dim); white-space: nowrap; width: 30%; font-family: ui-monospace, monospace; }
+  table.fields td.val { font-family: ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; }
+  .src-badge { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 3px; margin-right: 6px; font-family: sans-serif; }
+  .chain { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  .chain-node {
+    padding: 4px 10px; border-radius: 5px; font-size: 12px; border: 1px solid var(--border); background: #20232c;
+    cursor: pointer;
+  }
+  .chain-node.active { border-color: var(--accent); background: #2a2040; }
+  .chain-node.abstract { font-style: italic; color: var(--dim); }
+  .footer-note { margin-top: 28px; font-size: 12px; color: var(--dim); border-top: 1px solid var(--border); padding-top: 14px; }
+  .comp-list { display: flex; flex-direction: column; gap: 6px; }
+  .comp-chip {
+    font-size: 12px; padding: 5px 9px; border-radius: 5px; border: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center; font-family: ui-monospace, monospace;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="badge">Прототип · выбрасываемый код</span>
+  <h1>Резолв наследования прототипов SS14</h1>
+  <div class="intro">
+    Вопрос, на который отвечает этот демо (issue <b>#5 «Индекс прототипов и бюджет производительности»</b>):
+    <b>как в точности резолвится множественное наследование (<code>parent:</code> как скаляр и как список),
+    и совпадает ли предложенная модель индекса с тем, что реально делает движок RobustToolbox?</b>
+    Логика ниже — точный порт алгоритма движка
+    (<code>SerializationManager.PushComposition</code> + <code>PrototypeManager.PushKindInheritance</code>,
+    файлы <code>RobustToolbox/Robust.Shared/Serialization/Manager/SerializationManager.Composition.cs</code> и
+    <code>RobustToolbox/Robust.Shared/Prototypes/PrototypeManager.cs</code>), а не догадка. Все сценарии ниже,
+    кроме игрушечного, — реальные прототипы из форка <code>crystall-edge</code>.
+  </div>
+
+  <div class="tabs" id="tabs"></div>
+  <div class="scenario-desc" id="scenario-desc"></div>
+  <div class="steps" id="steps"></div>
+
+  <div class="grid">
+    <div class="panel">
+      <h3>Собственные поля узла (child)</h3>
+      <div id="own-fields"></div>
+    </div>
+    <div class="panel">
+      <h3>Резолвленный результат</h3>
+      <div class="legend" id="legend"></div>
+      <div id="resolved-fields"></div>
+    </div>
+  </div>
+
+  <div class="footer-note" id="footer-note"></div>
+</div>
+
+<script>
+// ===========================================================================
+// ЧИСТЫЙ МОДУЛЬ — не трогает DOM. Это и есть логика, которая при подтверждении
+// поднимается в реальный индекс (TypeScript) без переписывания.
+// ===========================================================================
+const InheritanceModel = (() => {
+  // CombineMappings (движок): result = child.Copy(); for (k,v) of parent: result.TryAddCopy(k,v)
+  // → добавляет ключ, ТОЛЬКО если его ещё нет в result. Порядок вызова в PushComposition:
+  //   node = child; for (p of parents) node = combine(node, p)
+  // Следствие: node (child) > parents[0] > parents[1] > … — первый в списке родитель
+  // выигрывает у последующих, но всегда проигрывает самому потомку.
+  // ВАЖНАЯ НАХОДКА: EntityPrototype.Abstract помечено C#-атрибутом [NeverPushInheritance]
+  // (EntityPrototype.cs:148) — конкретный потомок абстрактного родителя НЕ наследует
+  // abstract: true, иначе он стал бы неинстанцируемым просто по цепочке предков.
+  // Наивный "копируй все отсутствующие ключи" эту деталь ломает — индекс обязан
+  // знать список [NeverPushInheritance]-полей (сейчас в движке это только `abstract`).
+  const NEVER_PUSH_FIELDS = new Set(['parent', 'type', 'abstract']);
+
+  function combineMapping(node, parent, sourceTag, srcMap) {
+    const result = { ...node };
+    for (const [k, v] of Object.entries(parent)) {
+      if (NEVER_PUSH_FIELDS.has(k)) continue; // служебные + [NeverPushInheritance]-поля не наследуются
+      if (!(k in result)) {
+        result[k] = v;
+        srcMap[k] = sourceTag; // помним, откуда пришло поле — только для демо-подсветки
+      }
+    }
+    return result;
+  }
+
+  // components: SequenceDataNode, который семантически dictionary-по-type (ComponentRegistrySerializer).
+  // Мердж по ключу `type`; для полей внутри компонента действует то же правило "потомок побеждает".
+  function combineComponents(childComps, parentComps, sourceTag, compSrcMap) {
+    const byType = new Map((childComps ?? []).map((c) => [c.type, { ...c }]));
+    for (const c of parentComps ?? []) {
+      if (!byType.has(c.type)) {
+        byType.set(c.type, { ...c });
+        compSrcMap.set(c.type, sourceTag);
+      } else {
+        const existing = byType.get(c.type);
+        for (const [k, v] of Object.entries(c)) {
+          if (k === 'type') continue;
+          if (!(k in existing)) existing[k] = v;
+        }
+      }
+    }
+    return [...byType.values()];
+  }
+
+  // Резолвит один узел относительно уже резолвленных родителей (memo).
+  // parentsOwnOrder — родители в порядке, объявленном в `parent:` (важно для приоритета).
+  function resolveNode(ownFields, resolvedParents) {
+    let node = { ...ownFields };
+    const srcMap = {}; // fieldKey -> откуда пришло ('own' | 'p0' | 'p1' | ...)
+    for (const k of Object.keys(ownFields)) srcMap[k] = 'own';
+
+    const compSrcMap = new Map();
+    for (const c of ownFields.components ?? []) compSrcMap.set(c.type, 'own');
+
+    resolvedParents.forEach(({ tag, fields }, idx) => {
+      const { components: parentComps, ...parentRest } = fields;
+      node = combineMapping(node, parentRest, tag, srcMap);
+      const mergedComps = combineComponents(node.components, parentComps, tag, compSrcMap);
+      node.components = mergedComps;
+    });
+
+    return { resolved: node, srcMap, compSrcMap };
+  }
+
+  // Топологический резолв целого графа одного kind — как PushKindInheritance:
+  // от корней (без родителей) к листьям, каждый узел мерджится РОВНО ОДИН РАЗ (мемоизация встроена в порядок обхода).
+  function resolveGraph(nodesById) {
+    const indegree = new Map();
+    const children = new Map();
+    for (const [id, n] of nodesById) {
+      indegree.set(id, (n.parents ?? []).length);
+      for (const p of n.parents ?? []) {
+        if (!children.has(p)) children.set(p, []);
+        children.get(p).push(id);
+      }
+    }
+    const resolvedById = new Map();
+    const queue = [...nodesById.keys()].filter((id) => indegree.get(id) === 0);
+    let steps = 0;
+    while (queue.length) {
+      const id = queue.shift();
+      const n = nodesById.get(id);
+      const resolvedParents = (n.parents ?? []).map((p, i) => ({
+        tag: 'p' + i, fields: resolvedById.get(p)?.resolved ?? {},
+      }));
+      const r = resolveNode(n.own, resolvedParents);
+      resolvedById.set(id, r);
+      steps++;
+      for (const c of children.get(id) ?? []) {
+        indegree.set(c, indegree.get(c) - 1);
+        if (indegree.get(c) === 0) queue.push(c);
+      }
+    }
+    return { resolvedById, steps, totalNodes: nodesById.size };
+  }
+
+  return { resolveNode, resolveGraph };
+})();
+
+// ===========================================================================
+// Данные сценариев. toy — игрушечный пример для наглядности приоритета.
+// Остальные три — реальные прототипы из crystall-edge (см. extract-fixtures.mjs).
+// ===========================================================================
+const REAL_FIXTURES = {
+  "multiParentExample": {
+    "id": "ActionActivateMicroBomb",
+    "kind": "entity",
+    "file": "Resources\\Prototypes\\Actions\\types.yml",
+    "own": {
+      "type": "entity",
+      "parent": [
+        "BaseSuicideAction",
+        "BaseImplantAction"
+      ],
+      "id": "ActionActivateMicroBomb",
+      "name": "Activate Microbomb",
+      "description": "Activates your internal microbomb, completely destroying you and your equipment",
+      "components": [
+        {
+          "type": "DangerousAction"
+        },
+        {
+          "type": "Action",
+          "itemIconStyle": "BigAction",
+          "priority": -20
+        },
+        {
+          "type": "Sprite",
+          "sprite": "Actions/Implants/implants.rsi",
+          "layers": [
+            {
+              "state": "explosive"
+            }
+          ]
+        }
+      ]
+    },
+    "parents": [
+      {
+        "id": "BaseSuicideAction",
+        "own": {
+          "type": "entity",
+          "abstract": true,
+          "parent": "BaseMentalAction",
+          "id": "BaseSuicideAction",
+          "components": [
+            {
+              "type": "ConfirmableAction",
+              "popup": "suicide-action-popup"
+            }
+          ]
+        },
+        "file": "Resources\\Prototypes\\Actions\\types.yml"
+      },
+      {
+        "id": "BaseImplantAction",
+        "own": {
+          "type": "entity",
+          "abstract": true,
+          "parent": "BaseAction",
+          "id": "BaseImplantAction",
+          "components": [
+            {
+              "type": "InstantAction",
+              "event": ""
+            }
+          ]
+        },
+        "file": "Resources\\Prototypes\\Actions\\types.yml"
+      }
+    ],
+    "conflictField": "components"
+  },
+  "deepChain": [
+    {
+      "id": "BoxSurvivalHugNitrogen",
+      "own": {
+        "type": "entity",
+        "parent": "BoxSurvivalHug",
+        "id": "BoxSurvivalHugNitrogen",
+        "suffix": "Survival; N2",
+        "components": [
+          {
+            "type": "EntityTableContainerFill",
+            "containers": {
+              "storagebase": {
+                "children": [
+                  {
+                    "id": "ClothingMaskBreath"
+                  },
+                  {
+                    "id": "EmergencyNitrogenTankFilled"
+                  },
+                  {
+                    "id": "EmergencyMedipen"
+                  },
+                  {
+                    "id": "Flare"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Catalog\\Fills\\Boxes\\emergency.yml",
+      "abstract": false
+    },
+    {
+      "id": "BoxSurvivalHug",
+      "own": {
+        "type": "entity",
+        "parent": "BoxHug",
+        "id": "BoxSurvivalHug",
+        "suffix": "Survival; O2",
+        "components": [
+          {
+            "type": "EntityTableContainerFill",
+            "containers": {
+              "storagebase": {
+                "children": [
+                  {
+                    "id": "ClothingMaskBreath"
+                  },
+                  {
+                    "id": "EmergencyFunnyOxygenTankFilled"
+                  },
+                  {
+                    "id": "EmergencyMedipen"
+                  },
+                  {
+                    "id": "Flare"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Catalog\\Fills\\Boxes\\emergency.yml",
+      "abstract": false
+    },
+    {
+      "id": "BoxHug",
+      "own": {
+        "type": "entity",
+        "parent": "BoxBaseHug",
+        "id": "BoxHug",
+        "name": "box of hugs",
+        "description": "A special box for sensitive people.",
+        "components": [
+          {
+            "type": "PhysicalComposition",
+            "materialComposition": {
+              "Cardboard": 50
+            }
+          },
+          {
+            "type": "Sprite",
+            "layers": [
+              {
+                "state": "box_hug"
+              },
+              {
+                "state": "heart"
+              }
+            ]
+          },
+          {
+            "type": "Tag",
+            "tags": [
+              "BoxCardboard",
+              "BoxHug"
+            ]
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Catalog\\Fills\\Boxes\\general.yml",
+      "abstract": false
+    },
+    {
+      "id": "BoxBaseHug",
+      "own": {
+        "type": "entity",
+        "abstract": true,
+        "parent": "BaseBoxSurvival",
+        "id": "BoxBaseHug",
+        "components": [
+          {
+            "type": "Item",
+            "heldPrefix": "hug"
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Entities\\Objects\\Misc\\box.yml",
+      "abstract": true
+    },
+    {
+      "id": "BaseBoxSurvival",
+      "own": {
+        "type": "entity",
+        "parent": "BoxCardboardSmall",
+        "id": "BaseBoxSurvival",
+        "abstract": true,
+        "components": [
+          {
+            "type": "Item",
+            "shape": [
+              "0,0,1,2"
+            ]
+          },
+          {
+            "type": "Storage",
+            "grid": [
+              "0,0,1,2"
+            ]
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Catalog\\Fills\\Boxes\\emergency.yml",
+      "abstract": true
+    },
+    {
+      "id": "BoxCardboardSmall",
+      "own": {
+        "type": "entity",
+        "parent": "BoxBaseSmall",
+        "id": "BoxCardboardSmall",
+        "name": "small cardboard box",
+        "description": "A small cardboard box for storing things.",
+        "components": [
+          {
+            "type": "Construction",
+            "graph": "BoxCardboardSmall",
+            "node": "boxcardboardsmall",
+            "containers": [
+              "storagebase"
+            ]
+          },
+          {
+            "type": "PhysicalComposition",
+            "materialComposition": {
+              "Cardboard": 50
+            }
+          },
+          {
+            "type": "Sprite",
+            "state": "box"
+          },
+          {
+            "type": "Tag",
+            "tags": [
+              "BoxCardboard"
+            ]
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Catalog\\Fills\\Boxes\\general.yml",
+      "abstract": false
+    },
+    {
+      "id": "BoxBaseSmall",
+      "own": {
+        "type": "entity",
+        "abstract": true,
+        "parent": "BoxBase",
+        "id": "BoxBaseSmall",
+        "components": [
+          {
+            "type": "Item",
+            "size": "Normal",
+            "shape": [
+              "0,0,1,1"
+            ]
+          },
+          {
+            "type": "Storage",
+            "grid": [
+              "0,0,1,1"
+            ]
+          },
+          {
+            "type": "StaticPrice",
+            "price": 5
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Entities\\Objects\\Misc\\box.yml",
+      "abstract": true
+    },
+    {
+      "id": "BoxBase",
+      "own": {
+        "type": "entity",
+        "abstract": true,
+        "parent": "BaseStorageItem",
+        "id": "BoxBase",
+        "components": [
+          {
+            "type": "Sprite",
+            "sprite": "Objects/Storage/boxes.rsi"
+          },
+          {
+            "type": "Item",
+            "sprite": "Objects/Storage/boxes.rsi",
+            "size": "Large",
+            "shape": [
+              "0,0,2,2"
+            ]
+          },
+          {
+            "type": "Storage",
+            "maxItemSize": "Small",
+            "grid": [
+              "0,0,2,2"
+            ]
+          },
+          {
+            "type": "ContainerContainer",
+            "containers": {
+              "storagebase": ""
+            }
+          },
+          {
+            "type": "StaticPrice",
+            "price": 10
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Entities\\Objects\\Misc\\box.yml",
+      "abstract": true
+    },
+    {
+      "id": "BaseStorageItem",
+      "own": {
+        "type": "entity",
+        "name": "storage item",
+        "id": "BaseStorageItem",
+        "parent": "BaseItem",
+        "abstract": true,
+        "components": [
+          {
+            "type": "Storage"
+          },
+          {
+            "type": "UserInterface",
+            "interfaces": {
+              "enum.StorageUiKey.Key": {
+                "type": "StorageBoundUserInterface"
+              }
+            }
+          },
+          {
+            "type": "ContainerContainer",
+            "containers": {
+              "storagebase": {
+                "ents": []
+              }
+            }
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Entities\\Objects\\base_item.yml",
+      "abstract": true
+    },
+    {
+      "id": "BaseItem",
+      "own": {
+        "type": "entity",
+        "abstract": true,
+        "id": "BaseItem",
+        "name": "item",
+        "components": [
+          {
+            "type": "Item",
+            "size": "Small"
+          },
+          {
+            "type": "Animateable"
+          },
+          {
+            "type": "Clickable"
+          },
+          {
+            "type": "InteractionOutline"
+          },
+          {
+            "type": "MovedByPressure"
+          },
+          {
+            "type": "EmitSoundOnCollide",
+            "sound": {
+              "collection": "WeakHit"
+            }
+          },
+          {
+            "type": "EmitSoundOnLand",
+            "sound": {
+              "path": "/Audio/Effects/drop.ogg",
+              "params": {
+                "volume": 2
+              }
+            }
+          },
+          {
+            "type": "DamageOnHighSpeedImpact",
+            "damage": {
+              "types": {
+                "Blunt": 5
+              }
+            },
+            "soundHit": {
+              "collection": "MetalThud"
+            }
+          },
+          {
+            "type": "CollisionWake"
+          },
+          {
+            "type": "GravityAffected"
+          },
+          {
+            "type": "Physics",
+            "bodyType": "Dynamic",
+            "fixedRotation": false
+          },
+          {
+            "type": "Fixtures",
+            "fixtures": {
+              "fix1": {
+                "shape": {
+                  "bounds": "-0.25,-0.25,0.25,0.25"
+                },
+                "density": 20,
+                "mask": [
+                  "Impassable"
+                ],
+                "restitution": 0.3,
+                "friction": 0.2
+              }
+            }
+          },
+          {
+            "type": "Sprite",
+            "drawdepth": "Items",
+            "noRot": false
+          },
+          {
+            "type": "Pullable"
+          },
+          {
+            "type": "DamageExaminable"
+          },
+          {
+            "type": "CEZPhysics"
+          },
+          {
+            "type": "Rotatable",
+            "increment": 30
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Entities\\Objects\\base_item.yml",
+      "abstract": true
+    }
+  ],
+  "abstractExample": {
+    "id": "BaseActionChangelingSting",
+    "own": {
+      "type": "entity",
+      "abstract": true,
+      "parent": "BaseAction",
+      "id": "BaseActionChangelingSting",
+      "components": [
+        {
+          "type": "TargetAction",
+          "interactOnMiss": false
+        },
+        {
+          "type": "EntityTargetAction",
+          "whitelist": {
+            "components": [
+              "Bloodstream"
+            ]
+          },
+          "event": ""
+        },
+        {
+          "type": "ActionRequireSatiation",
+          "satiation": "Chemicals",
+          "amount": 30,
+          "failReason": "changeling-not-enough-chemicals"
+        },
+        {
+          "type": "PopupOnAction",
+          "popupType": "Medium",
+          "selfMessage": "changeling-sting-success"
+        }
+      ]
+    },
+    "file": "Resources\\Prototypes\\Actions\\changeling.yml"
+  },
+  "smallKindExample": {
+    "id": "AccessBreakerImmune",
+    "own": {
+      "type": "Tag",
+      "id": "AccessBreakerImmune"
+    },
+    "file": "Resources\\Prototypes\\tags.yml"
+  }
+};
+
+const SCENARIOS = {
+  toy: {
+    title: '① Игрушка: A ← [B, C]',
+    desc: `Синтетический пример на 3 узла, чтобы порядок слияния был виден без шума реальных данных.
+      <b>A</b> объявляет <code>parent: [B, C]</code>. И <b>B</b>, и <b>C</b> задают поле <code>color</code>
+      с разными значениями. По правилу движка (первый родитель побеждает у последующих, но проигрывает потомку)
+      итоговый <code>color</code> должен взяться у <b>B</b>, а не у <b>C</b> — даже если у A поля <code>color</code> нет вовсе.`,
+    nodesById: new Map(Object.entries({
+      B: { own: { id: 'B', color: 'green', shape: 'circle' }, parents: [] },
+      C: { own: { id: 'C', color: 'blue', weight: 5 }, parents: [] },
+      A: { own: { id: 'A', label: 'A own label' }, parents: ['B', 'C'] },
+    })),
+    steps: ['B', 'C', 'A'],
+    describeStep: (id) => `Резолвим «${id}»`,
+  },
+  multi: {
+    title: '② Реальный конфликт: ActionActivateMicroBomb',
+    desc: () => {
+      const f = REAL_FIXTURES.multiParentExample;
+      return `Реальная сущность <code>${f.id}</code> (<code>${f.file}</code>) объявляет
+        <code>parent: [${f.own.parent.join(', ')}]</code>. Оба родителя — <code>abstract: true</code>
+        заготовки экшенов, каждая добавляет свой компонент (<code>ConfirmableAction</code> у первого,
+        <code>InstantAction</code> у второго). Смотрим, как <code>components:</code> — на самом деле
+        словарь-по-<code>type</code>, а не обычный список — сливается по тому же правилу приоритета.`;
+    },
+    fromFixture: 'multiParentExample',
+  },
+  chain: {
+    title: '③ Глубокая цепочка (9 уровней)',
+    desc: () => {
+      const f = REAL_FIXTURES.deepChain;
+      return `Самая глубокая цепочка одиночного наследования, найденная в форке:
+        <code>${f.map((n) => n.id).join(' ← ')}</code> (${f.length - 1} уровней от корня <code>${f[f.length-1].id}</code>
+        до листа <code>${f[0].id}</code>). Резолв идёт от корня к листу и каждый узел мерджится РОВНО ОДИН РАЗ —
+        это и есть встроенная мемоизация: лист не пересчитывает предков заново, он берёт уже готовый резолв родителя.`;
+    },
+    fromFixture: 'deepChain',
+    isChain: true,
+  },
+  abstract: {
+    title: '④ abstract: болванка, не инстанс',
+    desc: () => {
+      const f = REAL_FIXTURES.abstractExample;
+      return `<code>${f.id}</code> (<code>${f.file}</code>) помечен <code>abstract: true</code>.
+        Движок (<code>PrototypeManager.TryReadPrototype</code>) резолвит его состав ТАК ЖЕ, как обычный узел —
+        он обязан участвовать в графе наследования, чтобы его потомки получили компоненты — но НИКОГДА
+        не создаёт из него живой инстанс прототипа. Вывод для индекса: abstract-узлы хранятся и резолвятся
+        как все остальные, но помечаются read-only/non-instantiable для действий инспектора («создать сущность»).`;
+    },
+    fromFixture: 'abstractExample',
+    single: true,
+  },
+};
+
+const SRC_COLORS = { own: 'var(--own)', p0: 'var(--p0)', p1: 'var(--p1)', p2: 'var(--p2)' };
+function srcColor(tag) { return SRC_COLORS[tag] ?? '#666'; }
+function srcLabel(tag) { return tag === 'own' ? 'свой' : 'родитель ' + (parseInt(tag.slice(1), 10) + 1); }
+
+let currentScenarioKey = 'toy';
+let currentStepIndex = 0;
+
+function renderTabs() {
+  const el = document.getElementById('tabs');
+  el.innerHTML = '';
+  for (const [key, s] of Object.entries(SCENARIOS)) {
+    const btn = document.createElement('button');
+    btn.className = 'tab' + (key === currentScenarioKey ? ' active' : '');
+    btn.textContent = s.title;
+    btn.onclick = () => { currentScenarioKey = key; currentStepIndex = 0; renderAll(); };
+    el.appendChild(btn);
+  }
+}
+
+function fieldsTable(obj, srcMap) {
+  const t = document.createElement('table');
+  t.className = 'fields';
+  for (const [k, v] of Object.entries(obj)) {
+    if (k === 'components') continue;
+    const tr = document.createElement('tr');
+    const tdK = document.createElement('td'); tdK.className = 'key'; tdK.textContent = k;
+    const tdV = document.createElement('td'); tdV.className = 'val';
+    if (srcMap && srcMap[k]) {
+      const badge = document.createElement('span');
+      badge.className = 'src-badge'; badge.textContent = srcLabel(srcMap[k]);
+      badge.style.background = srcColor(srcMap[k]); badge.style.color = '#0e0f14';
+      tdV.appendChild(badge);
+    }
+    tdV.appendChild(document.createTextNode(typeof v === 'object' ? JSON.stringify(v) : String(v)));
+    tr.appendChild(tdK); tr.appendChild(tdV);
+    t.appendChild(tr);
+  }
+  return t;
+}
+
+function componentsList(components, compSrcMap) {
+  if (!components || !components.length) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'comp-list';
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'font-size:11px;color:var(--dim);margin-top:10px;text-transform:uppercase;letter-spacing:.03em;';
+  hdr.textContent = 'components (merge-by-type)';
+  wrap.appendChild(hdr);
+  for (const c of components) {
+    const chip = document.createElement('div');
+    chip.className = 'comp-chip';
+    const tag = compSrcMap?.get(c.type);
+    chip.innerHTML = `<span>${c.type}</span>`;
+    if (tag) {
+      const badge = document.createElement('span');
+      badge.className = 'src-badge'; badge.textContent = srcLabel(tag);
+      badge.style.background = srcColor(tag); badge.style.color = '#0e0f14';
+      chip.appendChild(badge);
+    }
+    wrap.appendChild(chip);
+  }
+  return wrap;
+}
+
+function legend() {
+  const el = document.getElementById('legend');
+  el.innerHTML = '';
+  for (const [tag, color] of Object.entries(SRC_COLORS)) {
+    const span = document.createElement('span');
+    const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = color;
+    span.appendChild(dot);
+    span.appendChild(document.createTextNode(srcLabel(tag)));
+    el.appendChild(span);
+  }
+}
+
+function renderToyOrGraphScenario(s) {
+  const stepsEl = document.getElementById('steps');
+  stepsEl.innerHTML = '';
+  s.steps.forEach((id, i) => {
+    const b = document.createElement('button');
+    b.className = 'step-btn' + (i === currentStepIndex ? ' current' : '');
+    b.disabled = i > currentStepIndex + 1 ? false : false;
+    b.textContent = `${i + 1}. ${s.describeStep(id)}`;
+    b.onclick = () => { currentStepIndex = i; renderAll(); };
+    stepsEl.appendChild(b);
+  });
+
+  const currentId = s.steps[currentStepIndex];
+  const node = s.nodesById.get(currentId);
+
+  document.getElementById('own-fields').innerHTML = '';
+  document.getElementById('own-fields').appendChild(fieldsTable(node.own));
+
+  const resolvedParents = (node.parents ?? []).map((p, i) => {
+    const pNode = s.nodesById.get(p);
+    const r = InheritanceModel.resolveNode(pNode.own, (pNode.parents ?? []).map((pp, j) => ({
+      tag: 'p' + j, fields: {},
+    })));
+    return { tag: 'p' + i, fields: r.resolved };
+  });
+  const { resolved, srcMap } = InheritanceModel.resolveNode(node.own, resolvedParents);
+
+  document.getElementById('resolved-fields').innerHTML = '';
+  document.getElementById('resolved-fields').appendChild(fieldsTable(resolved, srcMap));
+
+  document.getElementById('footer-note').textContent =
+    `Родители «${currentId}»: [${(node.parents ?? []).join(', ') || '—'}]. ` +
+    (node.parents?.length > 1
+      ? `Конфликтующие поля берутся у ПЕРВОГО в списке (${node.parents[0]}), не у последующих.`
+      : '');
+}
+
+function renderMultiParent() {
+  const f = REAL_FIXTURES.multiParentExample;
+  document.getElementById('steps').innerHTML = '';
+
+  document.getElementById('own-fields').innerHTML = '';
+  document.getElementById('own-fields').appendChild(fieldsTable(f.own));
+  const ownComps = componentsList(f.own.components, new Map(f.own.components.map((c) => [c.type, 'own'])));
+  if (ownComps) document.getElementById('own-fields').appendChild(ownComps);
+
+  const resolvedParents = f.parents.map((p, i) => ({ tag: 'p' + i, fields: p.own }));
+  const { resolved, srcMap, compSrcMap } = InheritanceModel.resolveNode(f.own, resolvedParents);
+
+  document.getElementById('resolved-fields').innerHTML = '';
+  document.getElementById('resolved-fields').appendChild(fieldsTable(resolved, srcMap));
+  const comps = componentsList(resolved.components, compSrcMap);
+  if (comps) document.getElementById('resolved-fields').appendChild(comps);
+
+  document.getElementById('footer-note').innerHTML =
+    `Родители по порядку объявления: <code>${f.own.parent.join(', ')}</code>. ` +
+    `Компонент <code>ConfirmableAction</code> пришёл от первого родителя (${f.own.parent[0]}), ` +
+    `<code>InstantAction</code> — от второго (${f.own.parent[1]}); ни один не перекрыл другой, потому что тип компонента разный.`;
+}
+
+function renderChain() {
+  const chain = REAL_FIXTURES.deepChain; // [лист, ..., корень]
+  const stepsEl = document.getElementById('steps');
+  stepsEl.innerHTML = '';
+  const chainWrap = document.createElement('div');
+  chainWrap.className = 'chain';
+  // отображаем от корня к листу — так же, как резолвит движок
+  const rootToLeaf = [...chain].reverse();
+  rootToLeaf.forEach((n, i) => {
+    const b = document.createElement('button');
+    b.className = 'chain-node' + (i === currentStepIndex ? ' active' : '') + (n.abstract ? ' abstract' : '');
+    b.textContent = n.id + (n.abstract ? ' (abstract)' : '');
+    b.onclick = () => { currentStepIndex = i; renderAll(); };
+    chainWrap.appendChild(b);
+  });
+  stepsEl.appendChild(chainWrap);
+
+  // резолвим шаг за шагом от корня, мемоизируя каждый уровень — как PushKindInheritance
+  let prevResolved = null;
+  let prevId = null;
+  for (let i = 0; i <= currentStepIndex; i++) {
+    const n = rootToLeaf[i];
+    const resolvedParents = prevResolved ? [{ tag: 'p0', fields: prevResolved }] : [];
+    const r = InheritanceModel.resolveNode(n.own, resolvedParents);
+    prevResolved = r.resolved;
+    prevId = n.id;
+    if (i === currentStepIndex) {
+      document.getElementById('own-fields').innerHTML = '';
+      document.getElementById('own-fields').appendChild(fieldsTable(n.own));
+      const ownComps = componentsList(n.own.components, new Map((n.own.components ?? []).map((c) => [c.type, 'own'])));
+      if (ownComps) document.getElementById('own-fields').appendChild(ownComps);
+
+      document.getElementById('resolved-fields').innerHTML = '';
+      document.getElementById('resolved-fields').appendChild(fieldsTable(r.resolved, r.srcMap));
+      const comps = componentsList(r.resolved.components, r.compSrcMap);
+      if (comps) document.getElementById('resolved-fields').appendChild(comps);
+    }
+  }
+
+  document.getElementById('footer-note').textContent =
+    `Шаг ${currentStepIndex + 1} из ${rootToLeaf.length}: резолвим «${prevId}», используя УЖЕ ГОТОВЫЙ резолв ` +
+    `предыдущего уровня — предки выше по цепочке пересчитаны не были.`;
+}
+
+function renderAbstract() {
+  const f = REAL_FIXTURES.abstractExample;
+  document.getElementById('steps').innerHTML = '';
+  document.getElementById('own-fields').innerHTML = '';
+  document.getElementById('own-fields').appendChild(fieldsTable(f.own));
+  const ownComps = componentsList(f.own.components, new Map(f.own.components.map((c) => [c.type, 'own'])));
+  if (ownComps) document.getElementById('own-fields').appendChild(ownComps);
+
+  document.getElementById('resolved-fields').innerHTML =
+    '<div style="font-size:12.5px;color:var(--dim);padding:8px 0;">' +
+    'abstract: true → движок резолвит состав (для потомков), но <code>TryReadPrototype</code> ' +
+    'возвращает <code>null</code> и живой инстанс НЕ создаётся. В индексе узел присутствует ' +
+    'и участвует в графе наследования, но помечен <code>instantiable: false</code>.</div>';
+
+  document.getElementById('footer-note').textContent =
+    `Источник: PrototypeManager.cs → TryReadPrototype: "if (abstractNode.AsBool()) return null;"`;
+}
+
+function renderAll() {
+  renderTabs();
+  legend();
+  const s = SCENARIOS[currentScenarioKey];
+  document.getElementById('scenario-desc').innerHTML = typeof s.desc === 'function' ? s.desc() : s.desc;
+
+  if (currentScenarioKey === 'toy') renderToyOrGraphScenario(s);
+  else if (currentScenarioKey === 'multi') renderMultiParent();
+  else if (currentScenarioKey === 'chain') renderChain();
+  else if (currentScenarioKey === 'abstract') renderAbstract();
+}
+
+renderAll();
+</script>
+</body>
+</html>

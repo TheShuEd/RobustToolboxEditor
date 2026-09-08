@@ -1,0 +1,8 @@
+{
+  "name": "prototype-index-benchmark",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "yaml": "^2.8"
+  }
+}
