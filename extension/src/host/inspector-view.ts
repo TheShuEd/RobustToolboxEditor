@@ -1,33 +1,39 @@
 import * as vscode from 'vscode';
 
 import { generateNonce, renderWebviewHtml } from '../core';
-import type { WebviewToHost } from '../shared/protocol';
+import type { HelloMessage, WebviewToHost } from '../shared/protocol';
+import type { ForkStatusController } from './fork-status-controller';
 
 export { INSPECTOR_VIEW_ID } from '../core';
 
 /**
  * Sidebar webview view for the prototype inspector.
  *
- * Issue #21 ships only the shell: it proves the webview bundle loads as a single
- * ESM script tag under a strict CSP, and that the typed handshake round-trips.
- * Real inspector behaviour (cards, tree, widgets) comes in later tickets.
+ * Issue #21 shipped the shell (single ESM script tag, strict CSP, typed
+ * handshake). Issue #23 adds the fork-detection status: on `ready` the provider
+ * hands the live view to the {@link ForkStatusController}, which pushes the
+ * current verdict and keeps it fresh. Real inspector behaviour (cards, tree,
+ * widgets) comes in later tickets.
  */
 export class InspectorViewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly extensionVersion: string,
+    private readonly forkStatus: ForkStatusController,
   ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
-    const distUri = vscode.Uri.joinPath(this.extensionUri, 'dist');
+    // Scoped to the webview bundle folder only — not the whole `dist/`, which
+    // also holds the host bundle (issue #23 acceptance criterion).
+    const bundleUri = vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview');
 
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [distUri],
+      localResourceRoots: [bundleUri],
     };
 
     const scriptUri = webviewView.webview
-      .asWebviewUri(vscode.Uri.joinPath(distUri, 'webview', 'main.js'))
+      .asWebviewUri(vscode.Uri.joinPath(bundleUri, 'main.js'))
       .toString();
 
     webviewView.webview.html = renderWebviewHtml({
@@ -38,12 +44,15 @@ export class InspectorViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage((message: WebviewToHost) => {
       switch (message.type) {
-        case 'ready':
-          void webviewView.webview.postMessage({
+        case 'ready': {
+          const hello: HelloMessage = {
             type: 'hello',
             extensionVersion: this.extensionVersion,
-          });
+          };
+          void webviewView.webview.postMessage(hello);
+          this.forkStatus.bind(webviewView);
           break;
+        }
       }
     });
   }

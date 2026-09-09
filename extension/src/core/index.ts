@@ -13,11 +13,21 @@ export const PUBLISHER = 'crystallpunk-14';
 export const QUALIFIED_EXTENSION_ID = `${PUBLISHER}.${EXTENSION_ID}`;
 
 /**
- * Id of the sidebar inspector view. Lives here (vscode-free) so the host, the
- * smoke test, and `package.json` share one source rather than three literals.
+ * Ids of the extension's own activity-bar container and the inspector view it
+ * hosts. Live here (vscode-free) so the host, the smoke test, and `package.json`
+ * share one source rather than scattered literals.
  */
+export const VIEW_CONTAINER_ID = 'ss14editor';
 export const INSPECTOR_VIEW_ID = 'ss14editor.inspector';
 
 export { generateNonce } from './nonce';
 export { renderWebviewHtml } from './webview-html';
 export type { WebviewHtmlOptions } from './webview-html';
+export { detectFork } from './fork-detection';
+export type {
+  ForkFs,
+  ForkStatus,
+  ForkRecognized,
+  ForkUnrecognized,
+  ForkProblemCode,
+} from './fork-detection';

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 
 import { QUALIFIED_EXTENSION_ID } from '../core';
+import { ForkStatusController } from './fork-status-controller';
 import { INSPECTOR_VIEW_ID, InspectorViewProvider } from './inspector-view';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -9,10 +10,13 @@ export function activate(context: vscode.ExtensionContext): void {
     | undefined;
   const version = manifest?.version ?? '0.0.0';
 
+  const forkStatus = new ForkStatusController();
+
   context.subscriptions.push(
+    forkStatus,
     vscode.window.registerWebviewViewProvider(
       INSPECTOR_VIEW_ID,
-      new InspectorViewProvider(context.extensionUri, version),
+      new InspectorViewProvider(context.extensionUri, version, forkStatus),
     ),
   );
 

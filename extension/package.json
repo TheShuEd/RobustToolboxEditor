@@ -21,11 +21,20 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ss14editor",
+          "title": "SS14 Editor",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
     "views": {
-      "explorer": [
+      "ss14editor": [
         {
           "id": "ss14editor.inspector",
-          "name": "SS14 Inspector",
+          "name": "Inspector",
           "type": "webview"
         }
       ]

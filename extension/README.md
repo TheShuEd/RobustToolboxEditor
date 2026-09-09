@@ -8,17 +8,24 @@ and `docs/` for the domain model and design decisions, and issue
 ## Status
 
 Issue [#21](https://github.com/crystallpunk-14/SS14Editor/issues/21) — the
-skeleton. The extension activates and contributes an empty **SS14 Inspector**
-sidebar view. No editing behaviour yet; later tickets build on this shell.
+skeleton — plus issue
+[#23](https://github.com/crystallpunk-14/SS14Editor/issues/23): the extension
+contributes its own **SS14 Editor** activity-bar container holding an
+**Inspector** webview view. That panel now runs fork detection on the workspace
+root and reports either "SS14 fork recognized" or the single concrete reason it
+is not (no `RobustToolbox` submodule, no `Content.Server` / `Content.Client` /
+`Resources/Prototypes`, no DLLs in `bin/Content.*`, or a stale build). No editing
+behaviour yet; later tickets build on this shell.
 
 ## Layout
 
 | Path          | Layer                                                                       |
 | ------------- | -------------------------------------------------------------------------- |
-| `src/core/`   | Pure TypeScript. **No `vscode` import** — the single test seam (lint-enforced). |
-| `src/host/`   | Thin VS Code adapter: activation, view registration, `WorkspaceEdit`.       |
+| `src/core/`   | Pure TypeScript. **No `vscode` import** — the single test seam (lint-enforced). Fork detection lives here, over a `ForkFs` directory abstraction. |
+| `src/host/`   | Thin VS Code adapter: activation, view registration, the real-FS `ForkFs`, `WorkspaceEdit`. |
 | `src/webview/`| Inspector UI bundle. ESM, loaded from one `<script type="module">`.         |
 | `src/shared/` | Types shared by host and webview (the message protocol).                    |
+| `media/`      | Static assets shipped in the `.vsix` (the activity-bar icon).               |
 
 `esbuild.mjs` produces three independent bundles: `dist/extension.js` (host,
 CommonJS), `dist/webview/main.js` (webview, ESM), and `out/test/smoke/` (the
