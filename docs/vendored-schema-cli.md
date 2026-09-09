@@ -24,8 +24,10 @@ single record of origin.
 | `schema-cli/tests/*.cs`, `schema-cli/tests/Fixtures/*.cs` | `tests/ss14-editor.Tests/{MetadataExtractor,FieldExtractor,CtorDefaultsScanner,XmlDocReader}Tests.cs`, `TempDir.cs`, `Fixtures/{FixtureTypes,RuntimeHandleStubs}.cs` | verbatim |
 
 The vendored `.cs` files are unmodified byte-for-byte. Only the project files
-(`.csproj`), the `InternalsVisibleTo` shim and the ~30-line entry point
-(`schema-cli/Program.cs`) are new.
+(`.csproj`), the `InternalsVisibleTo` shim and the entry point
+(`schema-cli/Program.cs`) are new. The spec envisaged a ~30-line entry point;
+the actual ~110 lines are that core plus the spec-required `sourceFingerprint`
+helper, the unreadable-assembly checks and the argument/error handling.
 
 ## What was NOT copied
 

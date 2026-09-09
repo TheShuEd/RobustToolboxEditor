@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sourceFingerprint": "8b224a958a983d994380b0e18a821098c8d09f82f4c37da4671c1bab61e28572",
+  "sourceFingerprint": "6cf38fad4ff9bfce5769d026573c5b6942c3483fe6f9a4669db156fd928a8426",
   "prototypes": {
     "demiplaneLocation": {
       "className": "Content.Server._CE.Demiplane.Prototypes.CEDemiplaneLocationPrototype",

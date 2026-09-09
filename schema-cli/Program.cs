@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -17,7 +20,7 @@ namespace Content.Editor;
 ///
 /// All of the extraction is the vendored <see cref="MetadataExtractor"/> from
 /// the predecessor editor (TheShuEd/SS14Editor@7dcf674). This entry point only
-///   * resolves the fork's input DLLs,
+///   * resolves the fork's input DLLs and rejects unreadable ones,
 ///   * adds the two contract roots <c>schemaVersion</c> and
 ///     <c>sourceFingerprint</c> in front of the predecessor's
 ///     <c>MetadataRoot</c> shape, and
@@ -28,6 +31,13 @@ public static class Program
 {
     /// <summary>Bumped whenever the emitted document's shape changes.</summary>
     public const int SchemaVersion = 1;
+
+    /// <summary>
+    /// Sub-directories of <c>&lt;forkRoot&gt;/bin</c> the schema is built from —
+    /// the upstream <c>OutputPath</c> convention. Named once so the resolver and
+    /// the diagnostics can't drift apart.
+    /// </summary>
+    private static readonly string[] ContentBinDirs = { "Content.Server", "Content.Client" };
 
     public static int Main(string[] args)
     {
@@ -43,9 +53,11 @@ public static class Program
         var forkRoot = Path.GetFullPath(args[0]);
         var outputDir = Path.GetFullPath(args[1]);
 
-        var inputDlls = new[] { "Content.Server", "Content.Client" }
+        var binDirs = ContentBinDirs
             .Select(name => Path.Combine(forkRoot, "bin", name))
             .Where(Directory.Exists)
+            .ToArray();
+        var inputDlls = binDirs
             .SelectMany(dir => Directory.GetFiles(dir, "*.dll", SearchOption.TopDirectoryOnly))
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -53,8 +65,21 @@ public static class Program
         if (inputDlls.Length == 0)
         {
             Console.Error.WriteLine(
-                $"error: no DLLs found under '{Path.Combine(forkRoot, "bin", "Content.Server")}' " +
-                $"or '{Path.Combine(forkRoot, "bin", "Content.Client")}' — build the fork first (dotnet build).");
+                "error: no DLLs found under " +
+                string.Join(" or ", ContentBinDirs.Select(n => $"'{Path.Combine(forkRoot, "bin", n)}'")) +
+                " — build the fork first (dotnet build).");
+            return 1;
+        }
+
+        // "нечитаемая сборка" acceptance path: the fork's own managed assemblies
+        // (Content.*.dll) must parse as PE + metadata. Native side-by-side deps
+        // (SDL2, openal, …) are not checked — the extractor skips them anyway.
+        var unreadable = ManagedAssembliesThatFailToOpen(inputDlls);
+        if (unreadable.Count > 0)
+        {
+            Console.Error.WriteLine("error: unreadable assembly:");
+            foreach (var line in unreadable)
+                Console.Error.WriteLine($"  {line}");
             return 1;
         }
 
@@ -70,7 +95,7 @@ public static class Program
             return 0;
         }
 
-        JsonObject metadata;
+        JsonObject extracted;
         var scratch = Directory.CreateTempSubdirectory("ss14-schema-cli-");
         try
         {
@@ -85,7 +110,7 @@ public static class Program
                 return 1;
             }
 
-            metadata = JsonNode.Parse(File.ReadAllText(producedPath))!.AsObject();
+            extracted = JsonNode.Parse(File.ReadAllText(producedPath))!.AsObject();
         }
         catch (Exception ex)
         {
@@ -97,21 +122,30 @@ public static class Program
             try { scratch.Delete(recursive: true); } catch { /* best effort */ }
         }
 
+        if (IsEmpty(extracted, "prototypes") && IsEmpty(extracted, "components") &&
+            IsEmpty(extracted, "dataDefinitions"))
+        {
+            Console.Error.WriteLine(
+                "error: extraction produced an empty schema — an input assembly is unreadable " +
+                "or the fork is not built.");
+            return 1;
+        }
+
         // Contract = the two new roots, then MetadataRoot's own members verbatim.
-        var document = new JsonObject
+        var schema = new JsonObject
         {
             ["schemaVersion"] = SchemaVersion,
             ["sourceFingerprint"] = fingerprint,
         };
-        foreach (var property in metadata.ToArray())
+        foreach (var property in extracted.ToArray())
         {
-            metadata.Remove(property.Key);
-            document[property.Key] = property.Value;
+            extracted.Remove(property.Key);
+            schema[property.Key] = property.Value;
         }
 
         File.WriteAllText(
             outputPath,
-            document.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            schema.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         File.WriteAllText(fingerprintPath, fingerprint);
 
         Console.WriteLine(
@@ -119,12 +153,47 @@ public static class Program
         return 0;
     }
 
+    private static bool IsEmpty(JsonObject root, string key) =>
+        root[key] is not JsonObject obj || obj.Count == 0;
+
     /// <summary>
-    /// SHA256 over <c>path|size|mtime</c> of every input DLL plus this CLI's
+    /// Opens every <c>Content.*.dll</c> as a PE image and reads its metadata
+    /// table. Returns a <c>"path (reason)"</c> line for each that a truncated
+    /// or non-managed file would produce; an empty list means all are readable.
+    /// </summary>
+    private static List<string> ManagedAssembliesThatFailToOpen(string[] dllPaths)
+    {
+        var bad = new List<string>();
+        foreach (var path in dllPaths)
+        {
+            if (!Path.GetFileName(path).StartsWith("Content.", StringComparison.Ordinal))
+                continue;
+            try
+            {
+                using var stream = File.OpenRead(path);
+                using var pe = new PEReader(stream);
+                if (!pe.HasMetadata)
+                {
+                    bad.Add($"{path} (not a managed assembly)");
+                    continue;
+                }
+                _ = pe.GetMetadataReader();
+            }
+            catch (Exception ex)
+            {
+                bad.Add($"{path} ({ex.Message})");
+            }
+        }
+        return bad;
+    }
+
+    /// <summary>
+    /// SHA256 over <c>name|size|mtime</c> of every input DLL plus this CLI's
     /// own version. Uses file metadata rather than content hashes: MSBuild
     /// rewrites an output DLL on every rebuild, so size or last-write-time is
     /// enough to detect a change and is orders of magnitude cheaper for a
-    /// fork with ~1000 DLLs.
+    /// fork with ~1000 DLLs. File name (not full path) keeps the value stable
+    /// across checkouts.
     /// </summary>
     private static string ComputeSourceFingerprint(string[] dllPaths)
     {
@@ -132,7 +201,7 @@ public static class Program
         foreach (var path in dllPaths)
         {
             var info = new FileInfo(path);
-            sb.Append(info.FullName).Append('|')
+            sb.Append(info.Name).Append('|')
               .Append(info.Length).Append('|')
               .Append(info.LastWriteTimeUtc.Ticks).Append('\n');
         }

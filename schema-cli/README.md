@@ -8,7 +8,9 @@ flags.
 
 The extraction is the vendored metadata layer from the predecessor editor —
 see [`../docs/vendored-schema-cli.md`](../docs/vendored-schema-cli.md). This
-project only adds a ~30-line entry point.
+project only adds a small entry point (`Program.cs`): input resolution, the
+`sourceFingerprint` / no-op cache, unreadable-assembly checks, and splicing the
+two contract roots onto the vendored `MetadataRoot`.
 
 ## Layout
 
