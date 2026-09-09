@@ -1,27 +1,28 @@
 {
   "version": "2.0.0",
-  "windows": {
-    "options": {
-      "shell": {
-        "executable": "cmd.exe",
-        "args": ["/d", "/c"]
-      }
-    }
-  },
   "tasks": [
     {
-      "label": "npm: build",
-      "type": "shell",
-      "command": "npm",
-      "args": ["run", "build"],
-      "group": "build",
-      "problemMatcher": []
+      // One-shot bundle, used as the F5 preLaunchTask (must terminate).
+      // `type: process` runs node directly — no shell, so it dodges both the
+      // PowerShell execution-policy block on npm.ps1 and PATH ambiguity.
+      "label": "build",
+      "type": "process",
+      "command": "node",
+      "args": ["esbuild.mjs"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "clear": true }
     },
     {
-      "label": "npm: watch",
-      "type": "shell",
-      "command": "npm",
-      "args": ["run", "watch"],
+      // Manual `esbuild --watch`. Run it yourself (Terminal > Run Task > watch)
+      // while iterating; do not wire it into launch.json (a background task with
+      // no completion signal would wedge the launch).
+      "label": "watch",
+      "type": "process",
+      "command": "node",
+      "args": ["esbuild.mjs", "--watch"],
+      "options": { "cwd": "${workspaceFolder}" },
       "isBackground": true,
       "group": "build",
       "problemMatcher": []

@@ -1,0 +1,7 @@
+{
+  // The js-debug "Network view" instruments node:inspector's network_http.
+  // On this repo's F5 setup it throws `Missing dataLength in event` inside the
+  // Extension Development Host and SIGABRTs the extension host (exit 134),
+  // closing the EDH window after a second or two. Off = stable F5.
+  "debug.javascript.enableNetworkView": false
+}

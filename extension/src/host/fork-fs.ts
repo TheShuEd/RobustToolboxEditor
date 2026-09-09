@@ -41,6 +41,8 @@ export function createForkFs(rootPath: string): ForkFs {
           encoding: 'utf8',
           windowsHide: true,
           maxBuffer: 64 * 1024 * 1024,
+          // Runs on the extension-host thread; never let a wedged git freeze it.
+          timeout: 10_000,
         });
         return stdout.split('\0').filter((entry) => entry.length > 0);
       }, undefined),

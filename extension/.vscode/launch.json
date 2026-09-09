@@ -5,9 +5,17 @@
       "name": "Run Extension",
       "type": "extensionHost",
       "request": "launch",
-      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        // Isolate: a crash in one of your other installed extensions can take
+        // the whole extension host (and its window) down. Drop this flag once
+        // the window is stable if you need another extension while testing.
+        "--disable-extensions"
+        // To test against a real fork, append its path as a bare arg, e.g.:
+        //   "C:\\Users\\you\\CrystallEdge\\crystall-edge"
+      ],
       "outFiles": ["${workspaceFolder}/dist/**/*.js"],
-      "preLaunchTask": "npm: build"
+      "preLaunchTask": "build"
     }
   ]
 }
