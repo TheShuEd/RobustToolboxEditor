@@ -1,0 +1,8 @@
+{
+  "name": "prototype-surgical-edits",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "yaml": "^2.8"
+  }
+}
