@@ -2,7 +2,7 @@ import * as assert from 'node:assert';
 
 import * as vscode from 'vscode';
 
-const QUALIFIED_EXTENSION_ID = 'crystallpunk-14.ss14editor';
+import { INSPECTOR_VIEW_ID, QUALIFIED_EXTENSION_ID } from '../../src/core';
 
 suite('activation smoke', () => {
   test('the extension is installed in the test host', () => {
@@ -26,8 +26,8 @@ suite('activation smoke', () => {
       Array<{ id: string; type?: string }>
     >;
     const contributed = Object.values(views).flat();
-    const inspector = contributed.find((v) => v.id === 'ss14editor.inspector');
-    assert.ok(inspector, 'ss14editor.inspector view is not contributed');
+    const inspector = contributed.find((v) => v.id === INSPECTOR_VIEW_ID);
+    assert.ok(inspector, `${INSPECTOR_VIEW_ID} view is not contributed`);
     assert.strictEqual(inspector.type, 'webview');
   });
 });

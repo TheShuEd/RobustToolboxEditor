@@ -10,7 +10,8 @@ export interface WebviewHtmlOptions {
 /**
  * Build the full HTML document for the inspector webview.
  *
- * Structural guarantees the predecessor lacked (spec #20, ADR-0002):
+ * Structural guarantees the predecessor lacked (spec #20; CSP shape from
+ * docs/research/inspector-vscode-surfaces.md):
  *   - exactly one `<script>` tag, `type="module"`, no inline script;
  *   - a strict nonce-based CSP with `default-src 'none'`;
  *   - styles limited to the webview's own resource origin.
@@ -18,8 +19,7 @@ export interface WebviewHtmlOptions {
 export function renderWebviewHtml({ scriptUri, cspSource, nonce }: WebviewHtmlOptions): string {
   const csp = [
     `default-src 'none'`,
-    `img-src ${cspSource} https: data:`,
-    `style-src ${cspSource} 'nonce-${nonce}'`,
+    `style-src ${cspSource}`,
     `script-src 'nonce-${nonce}'`,
   ].join('; ');
 

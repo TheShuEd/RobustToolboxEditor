@@ -3,13 +3,12 @@ import * as esbuild from 'esbuild';
 const watch = process.argv.includes('--watch');
 
 /**
- * Three independent bundles (issue #21):
+ * Bundles (issue #21):
  *   - host    : the thin VS Code adapter + pure core, CommonJS for the Extension Host
  *   - webview : the sidebar inspector UI, ESM, loaded from a single <script type="module">
- *   - smoke   : the `@vscode/test-electron` activation test, compiled so the test CLI can run it
  *
- * The `dotnet publish` step for the C# schema extractor will slot in ahead of this
- * script (copying its output into `assets/`); nothing here depends on it yet.
+ * Plus one build-tooling bundle:
+ *   - smoke   : the `@vscode/test-electron` activation test, compiled so the test CLI can run it
  */
 
 /** @type {import('esbuild').BuildOptions} */

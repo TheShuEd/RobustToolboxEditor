@@ -3,8 +3,8 @@
  *
  * Issue #21 ships only the handshake. Later tickets extend these unions with the
  * inspector model, field-edit intents (`{ path, value, range }`), and
- * "not synchronised" signals. Both sides `switch` on `type` with exhaustiveness
- * checking — no untyped `postMessage` payloads (spec #20, ADR-0004).
+ * "not synchronised" signals. Both sides `switch` on `type`; payloads are never
+ * untyped `postMessage` blobs (spec #20).
  */
 
 export interface HelloMessage {

@@ -3,14 +3,14 @@ import * as vscode from 'vscode';
 import { generateNonce, renderWebviewHtml } from '../core';
 import type { WebviewToHost } from '../shared/protocol';
 
-export const INSPECTOR_VIEW_ID = 'ss14editor.inspector';
+export { INSPECTOR_VIEW_ID } from '../core';
 
 /**
  * Sidebar webview view for the prototype inspector.
  *
  * Issue #21 ships only the shell: it proves the webview bundle loads as a single
  * ESM script tag under a strict CSP, and that the typed handshake round-trips.
- * Real inspector behaviour (cards, tree, widgets) arrives in later tickets.
+ * Real inspector behaviour (cards, tree, widgets) comes in later tickets.
  */
 export class InspectorViewProvider implements vscode.WebviewViewProvider {
   constructor(
@@ -37,11 +37,13 @@ export class InspectorViewProvider implements vscode.WebviewViewProvider {
     });
 
     webviewView.webview.onDidReceiveMessage((message: WebviewToHost) => {
-      if (message.type === 'ready') {
-        void webviewView.webview.postMessage({
-          type: 'hello',
-          extensionVersion: this.extensionVersion,
-        });
+      switch (message.type) {
+        case 'ready':
+          void webviewView.webview.postMessage({
+            type: 'hello',
+            extensionVersion: this.extensionVersion,
+          });
+          break;
       }
     });
   }

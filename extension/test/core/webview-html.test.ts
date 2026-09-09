@@ -32,8 +32,12 @@ describe('renderWebviewHtml', () => {
     expect(html).not.toContain("script-src 'self'");
   });
 
-  it('scopes styles to the webview resource origin', () => {
-    expect(renderWebviewHtml(options)).toContain(`style-src ${options.cspSource}`);
+  it('scopes styles to the webview resource origin, nothing wider', () => {
+    const html = renderWebviewHtml(options);
+    expect(html).toContain(`style-src ${options.cspSource};`);
+    // No permissions for needs the skeleton does not have.
+    expect(html).not.toContain('img-src');
+    expect(html).not.toContain(`style-src ${options.cspSource} 'nonce-`);
   });
 
   it('is a complete HTML document', () => {
