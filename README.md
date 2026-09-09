@@ -1,8 +1,8 @@
 # SS14 Prototype Editor
 
 VS Code extension for editing SS14 (RobustToolbox) YAML prototypes with schema
-awareness. This package is the extension itself; see the repo root `CONTEXT.md`
-and `docs/` for the domain model and design decisions, and issue
+awareness. The extension lives at the repo root; see `CONTEXT.md` and `docs/`
+for the domain model and design decisions, and issue
 [#20](https://github.com/crystallpunk-14/SS14Editor/issues/20) for the v1 spec.
 
 ## Status
@@ -58,9 +58,9 @@ npm run package          # build + build:schema-cli + vsce package -> ss14editor
 ## Schema extractor
 
 The v1 spec pairs this extension with the vendored C# CLI in
-[`../schema-cli/`](../schema-cli/) that extracts the schema from a fork's
+[`schema-cli/`](schema-cli/) that extracts the schema from a fork's
 compiled DLLs (issue #22). CI (`.github/workflows/ci.yml`) runs
-`dotnet publish -c Release` into `extension/assets/schema-cli/` before the bundle
+`dotnet publish -c Release` into `assets/schema-cli/` before the bundle
 step, so the `.vsix` carries it. For a local F5 run against a real fork, run
 `npm run build:schema-cli` once first — without it the panel reports the
 extractor as not bundled.

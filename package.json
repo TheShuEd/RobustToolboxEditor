@@ -50,7 +50,7 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "node esbuild.mjs",
-    "build:schema-cli": "dotnet publish ../schema-cli/SS14Editor.SchemaCli.csproj -c Release -o assets/schema-cli",
+    "build:schema-cli": "dotnet publish schema-cli/SS14Editor.SchemaCli.csproj -c Release -o assets/schema-cli",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

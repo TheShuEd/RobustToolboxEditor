@@ -16,11 +16,11 @@ import {
  * The real schema snapshot the CLI (issue #22) generated on the `crystall-edge`
  * fork, committed at `schema-cli/fixtures/metadata.json`. Read straight from
  * there — it is the same file later tickets treat as their schema fixture, and
- * copying 14 MB into `extension/test/fixtures/` would only risk it drifting.
+ * copying 14 MB into `test/fixtures/` would only risk it drifting.
  */
 function schemaFixtureText(): string {
   return readFileSync(
-    fileURLToPath(new URL('../../../schema-cli/fixtures/metadata.json', import.meta.url)),
+    fileURLToPath(new URL('../../schema-cli/fixtures/metadata.json', import.meta.url)),
     'utf8',
   );
 }

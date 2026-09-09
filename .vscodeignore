@@ -5,6 +5,9 @@
 .vscode/**
 .vscode-test/**
 .vscode-test.mjs
+.claude/**
+docs/**
+schema-cli/**
 out/**
 src/**
 test/**
@@ -16,5 +19,8 @@ eslint.config.mjs
 vitest.config.ts
 tsconfig.json
 .gitignore
+.gitattributes
+CLAUDE.md
+CONTEXT.md
 .eslintcache
 assets/**/*.pdb

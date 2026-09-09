@@ -7,9 +7,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: extension
 
     steps:
       - uses: actions/checkout@v4
@@ -18,7 +15,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: extension/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -27,11 +24,10 @@ jobs:
       - run: npm ci
 
       # --- .NET schema extractor (issue #25) -----------------------------------
-      # Publish the framework-dependent CLI (issue #22) into the extension's
-      # assets/ so the bundle and `vsce package` below include it in the .vsix.
+      # Publish the framework-dependent CLI (issue #22) into assets/ so the
+      # bundle and `vsce package` below include it in the .vsix.
       - name: Build schema extractor
-        working-directory: ${{ github.workspace }}
-        run: dotnet publish schema-cli/SS14Editor.SchemaCli.csproj -c Release -o extension/assets/schema-cli
+        run: dotnet publish schema-cli/SS14Editor.SchemaCli.csproj -c Release -o assets/schema-cli
 
       - name: Verify the extractor is staged for packaging
         run: test -f assets/schema-cli/SS14Editor.SchemaCli.dll
@@ -63,5 +59,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ss14editor-vsix
-          path: extension/*.vsix
+          path: '*.vsix'
           if-no-files-found: error
