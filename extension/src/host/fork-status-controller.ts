@@ -15,12 +15,23 @@ const REFRESH_DEBOUNCE_MS = 300;
  * on `onDidChangeVisibility`. It also re-runs detection when the workspace
  * folders change or the built DLLs change on disk, so a "build is stale" verdict
  * clears after a rebuild without a window reload (spec #20, "Инвалидация").
+ *
+ * Issue #25 makes the verdict observable: {@link onDidChange} fires on every
+ * re-detection and {@link folder} exposes the current read, so the schema
+ * controller can (re)run the extractor exactly when the fork becomes — or stops
+ * being — a recognised, freshly-built fork.
  */
 export class ForkStatusController implements vscode.Disposable {
   private view: vscode.WebviewView | undefined;
   private viewBinding: vscode.Disposable | undefined;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private currentFolder: ForkFolderStatus | null = null;
+  private currentFolderUri: vscode.Uri | undefined;
   private readonly disposables: vscode.Disposable[] = [];
+  private readonly changeEmitter = new vscode.EventEmitter<ForkFolderStatus | null>();
+
+  /** Fires after every re-detection with the fresh verdict (or `null` if no local folder). */
+  readonly onDidChange = this.changeEmitter.event;
 
   constructor() {
     const dllWatcher = vscode.workspace.createFileSystemWatcher(
@@ -33,8 +44,23 @@ export class ForkStatusController implements vscode.Disposable {
 
     this.disposables.push(
       dllWatcher,
+      this.changeEmitter,
       vscode.workspace.onDidChangeWorkspaceFolders(bump),
     );
+
+    this.detect();
+  }
+
+  /**
+   * The workspace-folder root when — and only when — the current verdict is a
+   * recognised, freshly-built fork. Bundles the name and URI the schema
+   * controller needs so callers never re-check `.recognized` themselves.
+   */
+  recognizedRoot(): { readonly name: string; readonly uri: vscode.Uri } | undefined {
+    if (this.currentFolder?.status.recognized && this.currentFolderUri) {
+      return { name: this.currentFolder.name, uri: this.currentFolderUri };
+    }
+    return undefined;
   }
 
   /**
@@ -46,31 +72,40 @@ export class ForkStatusController implements vscode.Disposable {
     this.view = view;
     this.viewBinding?.dispose();
     this.viewBinding = view.onDidChangeVisibility(() => {
-      if (view.visible) this.publish();
+      if (view.visible) this.push();
     });
-    this.publish();
+    this.push();
   }
 
   private scheduleRefresh(): void {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
-    this.refreshTimer = setTimeout(() => this.publish(), REFRESH_DEBOUNCE_MS);
+    this.refreshTimer = setTimeout(() => this.refresh(), REFRESH_DEBOUNCE_MS);
   }
 
-  private publish(): void {
-    const message: ForkStatusMessage = { type: 'forkStatus', folder: this.detect() };
+  private refresh(): void {
+    this.detect();
+    this.push();
+    this.changeEmitter.fire(this.currentFolder);
+  }
+
+  private push(): void {
+    const message: ForkStatusMessage = { type: 'forkStatus', folder: this.currentFolder };
     void this.view?.webview.postMessage(message);
   }
 
   /**
-   * The verdict for the first local workspace folder, which must itself be the
-   * fork root. Multi-root and nested forks are out of scope (spec #20).
+   * Re-classify the first local workspace folder, which must itself be the fork
+   * root, and cache both the verdict and its folder URI. Multi-root and nested
+   * forks are out of scope (spec #20).
    */
-  private detect(): ForkFolderStatus | null {
+  private detect(): void {
     const folder = (vscode.workspace.workspaceFolders ?? []).find(
       (candidate) => candidate.uri.scheme === 'file',
     );
-    if (!folder) return null;
-    return { name: folder.name, status: detectFork(createForkFs(folder.uri.fsPath)) };
+    this.currentFolderUri = folder?.uri;
+    this.currentFolder = folder
+      ? { name: folder.name, status: detectFork(createForkFs(folder.uri.fsPath)) }
+      : null;
   }
 
   dispose(): void {

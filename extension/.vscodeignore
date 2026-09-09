@@ -1,4 +1,6 @@
-# Everything is bundled into dist/ by esbuild; ship only that.
+# The TS is bundled into dist/ by esbuild; the schema extractor is published
+# into assets/schema-cli/ by `npm run build:schema-cli`. Ship both of those,
+# nothing else. assets/ is intentionally NOT excluded here.
 .github/**
 .vscode/**
 .vscode-test/**
@@ -15,3 +17,4 @@ vitest.config.ts
 tsconfig.json
 .gitignore
 .eslintcache
+assets/**/*.pdb

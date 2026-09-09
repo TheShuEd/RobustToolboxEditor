@@ -20,14 +20,21 @@ jobs:
           cache: npm
           cache-dependency-path: extension/package-lock.json
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
       - run: npm ci
 
-      # --- .NET schema extractor -------------------------------------------------
-      # The schema-connection ticket adds `dotnet publish -c Release` here and
-      # copies the CLI output into extension/assets/ before the bundle step.
-      # Intentionally a no-op today so the shape of the job is already visible.
-      - name: Build schema extractor (placeholder)
-        run: echo "No schema extractor yet — added by the schema-connection ticket."
+      # --- .NET schema extractor (issue #25) -----------------------------------
+      # Publish the framework-dependent CLI (issue #22) into the extension's
+      # assets/ so the bundle and `vsce package` below include it in the .vsix.
+      - name: Build schema extractor
+        working-directory: ${{ github.workspace }}
+        run: dotnet publish schema-cli/SS14Editor.SchemaCli.csproj -c Release -o extension/assets/schema-cli
+
+      - name: Verify the extractor is staged for packaging
+        run: test -f assets/schema-cli/SS14Editor.SchemaCli.dll
 
       - name: Typecheck
         run: npm run typecheck
@@ -44,8 +51,14 @@ jobs:
       - name: Activation smoke test
         run: xvfb-run -a npm run test:smoke
 
+      # `npm run package` is the single packaging path (build + build:schema-cli
+      # + vsce package); the publish step above only front-loads a fast failure
+      # and stages assets/ for the check.
       - name: Package VSIX
         run: npm run package
+
+      - name: Verify the .vsix carries the schema extractor
+        run: npx vsce ls --no-dependencies | grep -qx 'assets/schema-cli/SS14Editor.SchemaCli.dll'
 
       - uses: actions/upload-artifact@v4
         with:

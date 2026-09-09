@@ -7,7 +7,7 @@
  * untyped `postMessage` blobs (spec #20).
  */
 
-import type { ForkStatus } from '../core';
+import type { ForkStatus, SchemaStatus } from '../core';
 
 export interface HelloMessage {
   type: 'hello';
@@ -34,8 +34,21 @@ export interface ForkStatusMessage {
   folder: ForkFolderStatus | null;
 }
 
+/**
+ * The host's current read of the fork schema. `status` is `null` when the fork
+ * is not a recognised, freshly-built fork (there is nothing to extract a schema
+ * from). Re-sent after every extractor run — on activation, after a debounced
+ * DLL change, and on the `SS14: Rebuild schema` command — and whenever the view
+ * becomes visible again. `SchemaStatus` is a summary only; the full schema
+ * object stays in the host for the provider tickets.
+ */
+export interface SchemaStatusMessage {
+  type: 'schemaStatus';
+  status: SchemaStatus | null;
+}
+
 /** Messages the host sends to the webview. */
-export type HostToWebview = HelloMessage | ForkStatusMessage;
+export type HostToWebview = HelloMessage | ForkStatusMessage | SchemaStatusMessage;
 
 /** Messages the webview sends to the host. */
 export type WebviewToHost = ReadyMessage;

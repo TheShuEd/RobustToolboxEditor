@@ -13,6 +13,8 @@
         "--disable-extensions"
         // To test against a real fork, append its path as a bare arg, e.g.:
         //   "C:\\Users\\you\\CrystallEdge\\crystall-edge"
+        // and run `npm run build:schema-cli` once so the schema extractor is
+        // present under assets/ (the "build" preLaunchTask only bundles the TS).
       ],
       "outFiles": ["${workspaceFolder}/dist/**/*.js"],
       "preLaunchTask": "build"

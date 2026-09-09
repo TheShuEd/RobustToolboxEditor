@@ -21,6 +21,13 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "commands": [
+      {
+        "command": "ss14editor.rebuildSchema",
+        "title": "Rebuild schema",
+        "category": "SS14"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {
@@ -43,6 +50,7 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "node esbuild.mjs",
+    "build:schema-cli": "dotnet publish ../schema-cli/SS14Editor.SchemaCli.csproj -c Release -o assets/schema-cli",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
@@ -50,7 +58,7 @@
     "pretest:smoke": "npm run build",
     "test:smoke": "vscode-test",
     "test": "npm run test:core && npm run test:smoke",
-    "package": "npm run build && vsce package --no-dependencies -o ss14editor.vsix"
+    "package": "npm run build && npm run build:schema-cli && vsce package --no-dependencies -o ss14editor.vsix"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",

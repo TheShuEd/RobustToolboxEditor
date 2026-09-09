@@ -31,6 +31,9 @@ window.addEventListener('message', (event: MessageEvent<HostToWebview>) => {
     case 'forkStatus':
       update({ folder: message.folder });
       break;
+    case 'schemaStatus':
+      update({ schema: message.status });
+      break;
   }
 });
 

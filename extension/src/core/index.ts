@@ -33,6 +33,28 @@ export type {
 } from './fork-detection';
 
 export {
+  EXPECTED_SCHEMA_VERSION,
+  schemaCacheDirName,
+  parseSchemaDocument,
+  interpretSchemaResult,
+} from './schema';
+export type {
+  SchemaParse,
+  SchemaRunOutcome,
+  SchemaResultInput,
+  SchemaStatus,
+} from './schema';
+export type {
+  SchemaRoot,
+  PrototypeMetadata,
+  ComponentMetadata,
+  DataDefinitionMetadata,
+  FieldMetadata,
+  FieldTypeNode,
+  EnumConstantEntry,
+} from './schema-contract';
+
+export {
   parsePrototypeFile,
   positionAt,
   resolveField,

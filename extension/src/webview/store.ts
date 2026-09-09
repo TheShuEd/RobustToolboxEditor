@@ -1,9 +1,10 @@
+import type { SchemaStatus } from '../core';
 import type { ForkFolderStatus } from '../shared/protocol';
 
 /**
  * The webview's whole state and its renderer.
  *
- * Issue #23 keeps this deliberately small: one plain object, one pure
+ * Issues #23 and #25 keep this deliberately small: one plain object, one pure
  * `render(root, state)`. It exists now so the inspector ticket extends a real
  * store instead of inventing one — and so there is never an ambient mutable
  * `window.state` like the predecessor had. The CSP forbids inline styles, so the
@@ -13,19 +14,29 @@ export interface ViewState {
   extensionVersion: string | undefined;
   /** `null` until the host's first push, or when no local folder is open. */
   folder: ForkFolderStatus | null;
+  /** `null` until the first extractor run, or when the fork is not a built fork. */
+  schema: SchemaStatus | null;
 }
 
 export const initialState: ViewState = {
   extensionVersion: undefined,
   folder: null,
+  schema: null,
 };
 
 export function render(root: HTMLElement, state: ViewState): void {
-  root.textContent = statusText(state.folder);
+  root.textContent = statusText(state);
 }
 
-function statusText(folder: ForkFolderStatus | null): string {
+/**
+ * One unified status line (spec #20 — no toast, no modal). When the folder is
+ * not a recognised, freshly-built fork, that reason wins. Once it is, the schema
+ * verdict takes over — "loaded" with counts, or the concrete failure reason.
+ */
+function statusText(state: ViewState): string {
+  const { folder, schema } = state;
   if (folder === null) return 'Open an SS14 fork folder to get started.';
-  if (folder.status.recognized) return '✓ SS14 fork recognized.';
-  return folder.status.message;
+  if (!folder.status.recognized) return folder.status.message;
+  if (schema === null) return '✓ SS14 fork recognized. Extracting schema…';
+  return schema.message;
 }

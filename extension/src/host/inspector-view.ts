@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { generateNonce, renderWebviewHtml } from '../core';
 import type { HelloMessage, WebviewToHost } from '../shared/protocol';
 import type { ForkStatusController } from './fork-status-controller';
+import type { SchemaController } from './schema-controller';
 
 export { INSPECTOR_VIEW_ID } from '../core';
 
@@ -10,16 +11,17 @@ export { INSPECTOR_VIEW_ID } from '../core';
  * Sidebar webview view for the prototype inspector.
  *
  * Issue #21 shipped the shell (single ESM script tag, strict CSP, typed
- * handshake). Issue #23 adds the fork-detection status: on `ready` the provider
- * hands the live view to the {@link ForkStatusController}, which pushes the
- * current verdict and keeps it fresh. Real inspector behaviour (cards, tree,
- * widgets) comes in later tickets.
+ * handshake). Issue #23 adds the fork-detection status and issue #25 the schema
+ * status: on `ready` the provider hands the live view to the two controllers,
+ * which push their current verdicts and keep them fresh. Real inspector
+ * behaviour (cards, tree, widgets) comes in later tickets.
  */
 export class InspectorViewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly extensionVersion: string,
     private readonly forkStatus: ForkStatusController,
+    private readonly schemaStatus: SchemaController,
   ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -51,6 +53,7 @@ export class InspectorViewProvider implements vscode.WebviewViewProvider {
           };
           void webviewView.webview.postMessage(hello);
           this.forkStatus.bind(webviewView);
+          this.schemaStatus.bind(webviewView);
           break;
         }
       }
