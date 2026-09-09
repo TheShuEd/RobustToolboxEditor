@@ -20,8 +20,17 @@
   элементом списка), `fixtures/light.yml` (`_CE/Procedural/Demiplane/Modifiers/light.yml` —
   `!type:`-тег), `fixtures/memorial.yml` (`Entities/Structures/Furniture/memorial.yml` —
   блочный скаляр `description: |`).
+- `demo-comment-insertion.mjs` — резолюция issue #14: вставка (классы 2 и 3) рядом с
+  комментарием, прилипшим к последнему существующему полю/компоненту. Фикстуры:
+  `fixtures/mapping.yml` (`Actions/mapping.yml` — трейлинг-комментарий на той же строке),
+  `fixtures/alert_levels.yml` (`AlertLevels/alert_levels.yml` — standalone многострочный блок
+  после последнего поля плоской карты), `fixtures/drinks_bottles_plastic.yml`
+  (`Entities/Objects/Consumable/Drinks/drinks_bottles_plastic.yml` — standalone комментарий
+  после последнего компонента `components:`, паттерн повторяется 13 раз в одном файле). Разбор
+  — `docs/research/yaml-insertion-near-comments.md`.
 
-Запуск: `npm install`, затем `node demo-fireaxe.mjs` и `node demo-hazards.mjs`.
+Запуск: `npm install`, затем `node demo-fireaxe.mjs`, `node demo-hazards.mjs` и
+`node demo-comment-insertion.mjs`.
 
 ## Ответы
 
@@ -96,6 +105,29 @@ Success-критерий тикета («дифф трогает только ц
 **Не проверено на реальной фикстуре:** комментарий прямо перед САМЫМ первым элементом
 последовательности (не карты) — открытый вопрос, нужна отдельная фикстура для карты
 (остаётся на карту).
+
+### Вставка (классы 2 и 3) рядом с комментарием (`demo-comment-insertion.mjs`, issue #14)
+
+Резолюция [issue #14](https://github.com/crystallpunk-14/SS14Editor/issues/14) — единственный
+оставшийся открытый вопрос из «Residual unknowns» п.3
+[`docs/research/ts-yaml-node-positions.md`](../docs/research/ts-yaml-node-positions.md): куда
+именно попадает вставка (класс 2 `insertKey`, класс 3 `insertComponentBlock`), если последнее
+существующее поле/компонент контейнера сопровождается комментарием. `fixtures/fireaxe.yml`
+этот случай не покрывала вообще — у обеих точек вставки там нет соседнего комментария.
+
+Полный разбор с точными офсетами — [`docs/research/yaml-insertion-near-comments.md`](../docs/research/yaml-insertion-near-comments.md).
+Коротко: **трейлинг-комментарий на той же строке, что последнее поле, — безопасен всегда**
+(он уже поглощён в `range[2]` значения, наивный и правильный офсет тождественны — доказано
+равенством на `fixtures/mapping.yml`). **Standalone-комментарий на отдельной строке — не был
+безопасен**: он становится `.comment` самого КОНТЕЙНЕРА (карты или `components:`-seq), а не
+последнего элемента, и старый алгоритм (`range[2]` последнего элемента) вставлял новое
+содержимое МЕЖДУ последним элементом и его комментарием, отрывая комментарий от того, к чему
+он относился (найдено и продемонстрировано на `fixtures/alert_levels.yml` и
+`fixtures/drinks_bottles_plastic.yml`, паттерн повторяется 13 раз в одном реальном файле форка).
+**Пофикшено** в `lib/edits.mjs`: `insertKey`/`insertComponentBlock` теперь берут `range[2]`
+самого контейнера, а не последнего элемента — на уже доказанных no-comment случаях
+(`fireaxe.yml`) оба офсета тождественны (проверено, `demo-fireaxe.mjs`/`demo-hazards.mjs` дают
+неизменные диффы), так что регрессии нет.
 
 ### Внешняя правка текста, пока инспектор открыт
 

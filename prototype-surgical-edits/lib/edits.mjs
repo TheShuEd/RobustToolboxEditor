@@ -35,25 +35,41 @@ export function replaceBlockScalar(text, lineCounter, pair, newLines, eol) {
 }
 
 // Класс 2: добавление ключа, которого в файле нет (материализация унаследованного значения).
-// Точка вставки — граница `range[2]` последнего существующего поля контейнера: это офсет,
-// с которого начинается следующий токен (следующий ключ, следующий элемент списка, пустая
-// строка перед ним — что угодно там ни было), гарантированно вне диапазона всех соседей.
+// Точка вставки — граница `range[2]` САМОГО КОНТЕЙНЕРА (карты), а не последнего поля.
+// Раньше здесь стояло `last.value.range[2]` (range[2] значения последнего поля) — это
+// эмпирически совпадает с `containerNode.range[2]` в дырка-нет-комментария случае (проверено
+// на fireaxe.yml, issue #10), но РАСХОДИТСЯ, когда последнее поле карты сопровождается
+// STANDALONE-комментарием на отдельной строке (не трейлинг на той же строке): такой комментарий
+// в CST/AST `yaml`@eemeli становится `.comment` САМОЙ карты (`containerNode.comment`), а
+// `containerNode.range[2]` расширяется, чтобы включить комментарий и последующие пустые строки —
+// а `last.value.range[2]` останавливается ДО комментария. Вставка по `last.value.range[2]` в
+// этом случае воткнула бы новую строку МЕЖДУ последним полем и его комментарием, оторвав
+// комментарий от того, к чему он относился (см. docs/research/yaml-insertion-near-comments.md,
+// фикстура `alert_levels.yml`). `containerNode.range[2]` корректен в обоих случаях —
+// доказано равенством на fireaxe.yml и на `alert_levels.yml`/`mapping.yml` для новых.
 // Отступ берём с колонки первого соседнего ключа того же контейнера — в блочных картах SS14
 // все поля одного узла всегда на одной колонке.
 export function insertKey(text, lineCounter, containerNode, key, valueRaw, eol) {
   const items = containerNode.items;
   if (items.length === 0) throw new Error('пустой контейнер без единого существующего поля — колонку отступа взять неоткуда');
-  const last = items[items.length - 1];
   const col = colAt(lineCounter, items[0].key.range[0]);
-  const insertAt = last.value.range[2];
+  const insertAt = containerNode.range[2];
   const indent = ' '.repeat(col - 1);
   return splice(text, insertAt, insertAt, `${indent}${key}: ${valueRaw}${eol}`);
 }
 
 // Класс 3: добавление целого блока `- type: X` в `components:`. Тот же приём с границей
-// `range[2]`, но отступ считаем в двух частях: колонка первого поля первого существующего
-// компонента даёт колонку ПОЛЕЙ нового блока; тире вставляем на два символа левее (`- ` перед
-// `type:` в блочной последовательности съедает ровно 2 колонки).
+// `range[2]`, но теперь — границей САМОЙ последовательности (`componentsSeq.range[2]`), не
+// последнего элемента (`items[items.length-1].range[2]`). Причина та же, что и в insertKey:
+// standalone-комментарий сразу после последнего компонента (перед закрытием `components:` —
+// новой entity или концом файла) в `yaml`@eemeli становится `.comment` самой seq-ноды
+// (`componentsSeq.comment`), НЕ последнего элемента и не следующей entity; `componentsSeq.range[2]`
+// включает этот комментарий и хвостовые пустые строки, `items[...].range[2]` — нет. Реальный
+// пример — 13 повторов `# TODO new sprite` после последнего компонента в
+// fixtures/drinks_bottles_plastic.yml (см. docs/research/yaml-insertion-near-comments.md).
+// Отступ считаем в двух частях: колонка первого поля первого существующего компонента даёт
+// колонку ПОЛЕЙ нового блока; тире вставляем на два символа левее (`- ` перед `type:` в
+// блочной последовательности съедает ровно 2 колонки).
 export function insertComponentBlock(text, lineCounter, componentsSeq, lines, eol) {
   const items = componentsSeq.items;
   if (items.length === 0) throw new Error('пустой components: — колонку отступа взять неоткуда');
@@ -61,7 +77,7 @@ export function insertComponentBlock(text, lineCounter, componentsSeq, lines, eo
   const fieldCol = colAt(lineCounter, first.items[0].key.range[0]);
   const dashIndent = ' '.repeat(fieldCol - 1 - 2);
   const fieldIndent = ' '.repeat(fieldCol - 1);
-  const insertAt = items[items.length - 1].range[2];
+  const insertAt = componentsSeq.range[2];
   const [firstLine, ...rest] = lines;
   const block = `${dashIndent}- ${firstLine}${eol}` + rest.map((l) => `${fieldIndent}${l}${eol}`).join('');
   return splice(text, insertAt, insertAt, block);
