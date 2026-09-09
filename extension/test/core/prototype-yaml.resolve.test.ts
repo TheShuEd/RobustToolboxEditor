@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveField } from '../../src/core/prototype-yaml';
+import { parsePrototypeFile, resolveField } from '../../src/core/prototype-yaml';
 import { parsedFixture } from './prototype-fixtures';
 
 describe('resolveField — path to text range', () => {
@@ -58,6 +58,35 @@ describe('resolveField — path to text range', () => {
       if (res.outcome !== 'missing') return;
       expect(res.missing.missingPath).toEqual(['damage', 'types', 'Piercing']);
     });
+
+    it('chain missing below an existing shallower container (FireAxe has damage, not damage.foo)', () => {
+      // FireAxe (entity 0) MeleeWeapon *does* have `damage.types`; `damage.foo.x` does not exist.
+      const res = resolveField(fireaxe, {
+        entityIndex: 0,
+        component: 'MeleeWeapon',
+        fieldPath: ['damage', 'foo', 'x'],
+      });
+      expect(res.outcome).toBe('missing');
+      if (res.outcome !== 'missing') return;
+      expect(res.missing.missingPath).toEqual(['foo', 'x']);
+      // containerRange points at the existing `damage:` map, not the file start.
+      const [start, , end] = res.missing.containerRange;
+      expect(end).toBeGreaterThan(start);
+      expect(fireaxe.text.slice(start, end)).toContain('types:');
+    });
+  });
+
+  it('a key present but value-less resolves to a zero-width range past the key, not [0,0,0]', () => {
+    const file = parsePrototypeFile('- type: entity\n  id: X\n  foo:\n');
+    if (!file.ok) throw new Error('setup parse failed');
+    const res = resolveField(file, { entityIndex: 0, fieldPath: ['foo'] });
+
+    expect(res.outcome).toBe('resolved');
+    if (res.outcome !== 'resolved') return;
+    expect(res.field.kind).toBe('null');
+    expect(res.field.range).not.toEqual([0, 0, 0]);
+    expect(res.field.valueRange[0]).toBeGreaterThan(0);
+    expect(res.field.valueRange[0]).toBe(res.field.valueRange[1]);
   });
 
   it('finds a component by its type value, not its position in components:', () => {

@@ -17,6 +17,26 @@ describe('cursorContextAt — offset to context', () => {
     expect(ctx.token).toEqual({ kind: 'component-type', text: 'Tag' });
   });
 
+  it('on the `type` key itself (not its value) reports a key token, not component-type', () => {
+    const offset = fireaxe.text.indexOf('- type: Tag') + '- ty'.length;
+    const ctx = cursorContextAt(fireaxe, offset);
+
+    expect(ctx.entityIndex).toBe(0);
+    expect(ctx.component).toBe('Tag');
+    expect(ctx.fieldPath).toEqual(['type']);
+    expect(ctx.token).toEqual({ kind: 'key', name: 'type' });
+  });
+
+  it('in the gap between a `key:` and its value still lands on that field', () => {
+    const offset = fireaxe.text.indexOf('description: Truly') + 'description:'.length;
+    const ctx = cursorContextAt(fireaxe, offset);
+
+    expect(ctx.entityIndex).toBe(0);
+    expect(ctx.component).toBeNull();
+    expect(ctx.fieldPath).toEqual(['description']);
+    expect(ctx.token).toEqual({ kind: 'value' });
+  });
+
   it('on a component field key', () => {
     const offset = fireaxe.text.indexOf('swingLeft: true') + 2;
     const ctx = cursorContextAt(fireaxe, offset);

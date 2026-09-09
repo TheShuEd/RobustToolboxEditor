@@ -16,14 +16,17 @@
  *   - Strip a leading U+FEFF before parsing. Without it `yaml`@eemeli yields a
  *     document full of errors for ~9% of real fork files, losing them silently.
  *   - `yaml` (eemeli) with `keepSourceTokens: true`, `strict: false`, and a
- *     `LineCounter` for offset -> line/col. The CST is the oracle for positions.
+ *     `LineCounter` for offset -> line/col. Positions here come from the AST
+ *     (`node.range`); `keepSourceTokens` is pinned by the spec and kept for the
+ *     surgical-edits ticket, which needs the CST (`node.srcToken`) for indent
+ *     and comment ownership. This module does not read `srcToken`.
  *   - No incremental parser: re-parse the whole document on every edit.
  *   - Any `doc.errors` => the file is "invalid" as a whole; callers get an error
  *     flag, never a partial tree.
  *
- * The parsed AST never leaves this module — {@link parsePrototypeFile} returns an
- * opaque handle and the CST is held in a side table. Tests see only offsets,
- * ranges, strings and enums, so they cannot grow a dependency on CST shape.
+ * The parsed tree never leaves this module — {@link parsePrototypeFile} returns
+ * an opaque handle and the AST is held in a side table. Tests see only offsets,
+ * ranges, strings and enums, so they cannot grow a dependency on node shape.
  */
 
 import {
@@ -60,7 +63,12 @@ export interface PrototypeParseError {
   readonly errors: readonly string[];
 }
 
-/** Opaque handle to a successfully parsed prototype file. The CST lives elsewhere. */
+/**
+ * Opaque handle to a successfully parsed prototype file; the AST lives in a side
+ * table keyed by this object. "entity" is the donor term (`prototype/*`, spec
+ * #24) for one item of the top-level prototype sequence, whatever its `type:` —
+ * `entity`, `jobIcon`, `demiplaneModifier` … — not only `type: entity`.
+ */
 export interface PrototypeFile {
   readonly ok: true;
   readonly hadBom: boolean;
@@ -76,7 +84,7 @@ export type ParseResult = PrototypeFile | PrototypeParseError;
 
 /** Address of a single field, mirroring `prototype/prototype-surgical-edits`. */
 export interface FieldAddress {
-  /** Positional index into the document's top-level prototype sequence. */
+  /** Positional index into the top-level prototype sequence (donor term: entity index). */
   readonly entityIndex: number;
   /**
    * Value of a component's `type:` key (never a list index — the engine keeps it
@@ -103,12 +111,16 @@ export interface ResolvedField {
 
 export interface MissingField {
   /**
-   * Tail of `fieldPath` that is absent from the text.
+   * Tail of `fieldPath` that is absent from the text, walking only through maps.
+   * With `containerRange` pointing at a map (the usual case):
    * `length === 1` — only the leaf key is missing (materialise one key);
    * `length > 1` — an intermediate container chain is missing too.
+   * If the walk hit a non-map (a scalar or sequence stands where a map was
+   * expected), this is the untraversed remainder and `containerRange` is that
+   * non-map node — the caller cannot materialise a key into it.
    */
   readonly missingPath: readonly string[];
-  /** Range of the deepest map that does exist in the text — the anchor for a materialising edit. */
+  /** Range of the deepest container that does exist in the text — the anchor for a materialising edit. */
   readonly containerRange: NodeRange;
 }
 
@@ -155,6 +167,14 @@ const internals = new WeakMap<PrototypeFile, Internals>();
 
 const BOM = 0xfeff;
 
+/**
+ * Parse a prototype file's text. Strips a leading U+FEFF first (recording it in
+ * `hadBom`), then parses the whole stream. Any parse error makes the file
+ * invalid as a whole — {@link PrototypeParseError} with every message, no
+ * partial tree. On success the AST is stashed in a side table keyed by the
+ * returned handle; {@link resolveField} / {@link cursorContextAt} / {@link positionAt}
+ * read it from there.
+ */
 export function parsePrototypeFile(rawText: string): ParseResult {
   const hadBom = rawText.charCodeAt(0) === BOM;
   const text = hadBom ? rawText.slice(1) : rawText;
@@ -246,9 +266,10 @@ interface Descent {
 }
 
 /**
- * Walk `fieldPath` from `container`, stopping at the first key absent from the
- * text — mirrors `findField` in `prototype/prototype-surgical-edits/lib/model.mjs`.
- * `missingPath` is the whole absent tail, so its length classifies the edit.
+ * Walk `fieldPath` from `container` through nested maps, stopping at the first
+ * key absent from the text (or the first non-map where a map was expected) —
+ * mirrors `findField` in `prototype/prototype-surgical-edits/lib/model.mjs`.
+ * `missingPath` is the whole untraversed tail; see {@link MissingField}.
  */
 function findField(container: Node, fieldPath: readonly string[]): Descent {
   let node: Node = container;
@@ -275,45 +296,62 @@ function findField(container: Node, fieldPath: readonly string[]): Descent {
   return { container: node, pair, missingPath: pair ? [] : [last] };
 }
 
-function anchorOf(node: Node): { anchor?: string } {
+/** The `&anchor` / `*alias` marks a value node may carry — both optional, usually absent. */
+function refMarkers(node: Node | null): { anchor?: string; alias?: string } {
+  if (!node) return {};
+  if (isAlias(node)) return { alias: node.source };
   const anchor = (node as { anchor?: unknown }).anchor;
   return typeof anchor === 'string' ? { anchor } : {};
 }
 
-function tagOf(node: Node): { tag?: string } {
+/** A verbatim `!type:` tag when present, else nothing; the tag is outside the value range. */
+function tagMarker(node: Node): { tag?: string } {
   const tag = (node as { tag?: unknown }).tag;
   return typeof tag === 'string' && tag.startsWith('!') ? { tag } : {};
 }
 
-function describeValue(value: Node | null): ResolvedField {
+function describeValue(pair: Pair | null, container: Node): ResolvedField {
+  const value = pair ? ((pair.value as Node | undefined) ?? null) : container;
+
+  // A key that is present in the text but has no value (`event:` with nothing
+  // after it): the field exists, so it resolves — as a zero-width range just
+  // past the key, never `[0, 0, 0]`.
   if (value == null) {
-    return { range: EMPTY_RANGE, valueRange: [0, 0], kind: 'null' };
+    const keyEnd = pair ? rangeOf(pair.key as Node)[2] : 0;
+    return { range: [keyEnd, keyEnd, keyEnd], valueRange: [keyEnd, keyEnd], kind: 'null' };
   }
 
   const range = rangeOf(value);
-  const common = { range, valueRange: [range[0], range[1]] as [number, number], ...tagOf(value) };
+  const common = {
+    range,
+    valueRange: [range[0], range[1]] as [number, number],
+    ...refMarkers(value),
+    ...tagMarker(value),
+  };
 
-  if (isAlias(value)) {
-    return { ...common, kind: 'alias', alias: value.source };
-  }
-  if (isMap(value)) {
-    return { ...common, kind: 'map', ...anchorOf(value) };
-  }
-  if (isSeq(value)) {
-    return { ...common, kind: 'seq', ...anchorOf(value) };
-  }
+  if (isAlias(value)) return { ...common, kind: 'alias' };
+  if (isMap(value)) return { ...common, kind: 'map' };
+  if (isSeq(value)) return { ...common, kind: 'seq' };
   if (isScalar(value)) {
     const block = value.type === Scalar.BLOCK_LITERAL || value.type === Scalar.BLOCK_FOLDED;
-    const kind = block ? 'block-scalar' : value.value === null ? 'null' : 'scalar';
-    return { ...common, kind, ...anchorOf(value) };
+    return { ...common, kind: block ? 'block-scalar' : value.value === null ? 'null' : 'scalar' };
   }
-  return { ...common, kind: 'null', ...anchorOf(value) };
+  return { ...common, kind: 'null' };
 }
 
 // ---------------------------------------------------------------------------
 // path -> range
 // ---------------------------------------------------------------------------
 
+/**
+ * Locate the field addressed by `{ entityIndex, component, fieldPath }`.
+ *   - `entity-not-found` / `component-not-found` — the container is not in the file.
+ *   - `resolved` — the field is in the text; `field` carries its value range
+ *     (no trailing whitespace, comment or `!type:` tag) plus alias/anchor/tag marks.
+ *   - `missing` — the container exists but the field does not; `missingPath` is
+ *     the whole absent key tail, so its length tells apart "missing leaf key"
+ *     (1) from "missing container chain" (> 1).
+ */
 export function resolveField(file: PrototypeFile, address: FieldAddress): FieldResolution {
   const { root } = must(file);
   if (!isSeq(root)) return { outcome: 'entity-not-found' };
@@ -339,8 +377,7 @@ export function resolveField(file: PrototypeFile, address: FieldAddress): FieldR
     };
   }
 
-  const value = descent.pair ? ((descent.pair.value as Node | undefined) ?? null) : container;
-  return { outcome: 'resolved', field: describeValue(value) };
+  return { outcome: 'resolved', field: describeValue(descent.pair, descent.container) };
 }
 
 // ---------------------------------------------------------------------------
@@ -361,17 +398,19 @@ function spans(node: unknown, offset: number): node is Node {
   return !!range && offset >= range[0] && offset < range[2];
 }
 
-function onComponentTypeSlot(typePair: Pair, offset: number): boolean {
+/**
+ * True only when `offset` is on the *value* slot of `type:` — strictly past the
+ * `type` key, up to the value's text end (or the rest of the line when nothing
+ * is typed yet). On the key itself, or on the next line, this is false so the
+ * caller falls through to {@link descend}.
+ */
+function onComponentTypeSlot(typePair: Pair, offset: number, text: string): boolean {
   const keyRange = (typePair.key as Node | null)?.range;
-  if (!keyRange || offset < keyRange[0]) return false;
+  if (!keyRange || offset <= keyRange[1]) return false;
   const valueRange = (typePair.value as Node | null)?.range;
-  return valueRange ? offset <= valueRange[2] : true;
-}
-
-function aliasAnchorOf(node: Node | null): { anchor?: string; alias?: string } {
-  if (!node) return {};
-  if (isAlias(node)) return { alias: node.source };
-  return anchorOf(node);
+  if (valueRange) return offset <= valueRange[1];
+  const newline = text.indexOf('\n', keyRange[1]);
+  return offset <= (newline === -1 ? text.length : newline);
 }
 
 interface DescendResult {
@@ -380,16 +419,27 @@ interface DescendResult {
   node: Node | null;
 }
 
-const NO_DESCENT: DescendResult = { chain: [], token: { kind: 'none' }, node: null };
-
-/** Find the deepest key/value in `map` that `offset` sits on, building the key chain. */
+/**
+ * Find the field in `map` whose line/block `offset` sits on, building the key
+ * chain. Each pair owns the text from its key start up to the next key (or the
+ * map's end), so an offset in the `key: ` gap or past a `key:` with no value
+ * still lands on that field as a `value` token — the point completion fires.
+ */
 function descend(map: YAMLMap, offset: number): DescendResult {
-  for (const pair of map.items) {
-    const keyName = scalarString(pair.key);
-    if (keyName === undefined) continue;
+  const items = map.items;
+  const mapEnd = map.range?.[2] ?? Number.MAX_SAFE_INTEGER;
 
-    const keyRange = (pair.key as Node).range;
-    if (keyRange && offset >= keyRange[0] && offset <= keyRange[1]) {
+  for (let i = 0; i < items.length; i++) {
+    const pair = items[i];
+    const keyName = scalarString(pair.key);
+    const keyRange = (pair.key as Node | null)?.range;
+    if (keyName === undefined || !keyRange) continue;
+
+    const nextKeyStart =
+      i + 1 < items.length ? (items[i + 1].key as Node | null)?.range?.[0] ?? mapEnd : mapEnd;
+    if (offset < keyRange[0] || offset >= nextKeyStart) continue;
+
+    if (offset <= keyRange[1]) {
       return {
         chain: [keyName],
         token: { kind: 'key', name: keyName },
@@ -398,23 +448,26 @@ function descend(map: YAMLMap, offset: number): DescendResult {
     }
 
     const value = (pair.value as Node | undefined) ?? null;
-    if (!spans(value, offset)) continue;
-
-    if (isMap(value)) {
+    if (isMap(value) && spans(value, offset)) {
       const sub = descend(value, offset);
-      if (sub.token.kind === 'none') {
-        return { chain: [keyName], token: { kind: 'value' }, node: value };
+      if (sub.token.kind !== 'none') {
+        sub.chain.unshift(keyName);
+        return sub;
       }
-      sub.chain.unshift(keyName);
-      return sub;
     }
     return { chain: [keyName], token: { kind: 'value' }, node: value };
   }
-  return { ...NO_DESCENT, chain: [] };
+  return { chain: [], token: { kind: 'none' }, node: null };
 }
 
+/**
+ * Describe where `offset` sits: which prototype and (inside `components:`) which
+ * component, the key chain to the field, and whether the caret is on a key, a
+ * value, or the `type:` slot of a component entry — plus alias/anchor marks on
+ * the value under it. Returns {@link NOWHERE} for an offset outside every prototype.
+ */
 export function cursorContextAt(file: PrototypeFile, offset: number): CursorContext {
-  const { root } = must(file);
+  const { root, text } = must(file);
   if (!isSeq(root)) return NOWHERE;
 
   const entityIndex = root.items.findIndex((item) => spans(item, offset));
@@ -438,7 +491,7 @@ export function cursorContextAt(file: PrototypeFile, offset: number): CursorCont
     const typePair = findPair(componentItem, 'type');
     const component = typePair ? scalarString(typePair.value) ?? null : null;
 
-    if (typePair && onComponentTypeSlot(typePair, offset)) {
+    if (typePair && onComponentTypeSlot(typePair, offset, text)) {
       return { ...shell, component, fieldPath: [], token: { kind: 'component-type', text: component } };
     }
 
@@ -448,7 +501,7 @@ export function cursorContextAt(file: PrototypeFile, offset: number): CursorCont
       component,
       fieldPath: inner.chain,
       token: inner.token,
-      ...aliasAnchorOf(inner.node),
+      ...refMarkers(inner.node),
     };
   }
 
@@ -458,6 +511,6 @@ export function cursorContextAt(file: PrototypeFile, offset: number): CursorCont
     component: null,
     fieldPath: inner.chain,
     token: inner.token,
-    ...aliasAnchorOf(inner.node),
+    ...refMarkers(inner.node),
   };
 }
