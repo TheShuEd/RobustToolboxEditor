@@ -39,18 +39,23 @@ export function findComponent(entityNode, componentType) {
 }
 
 // Спуск по цепочке ключей внутри карты (напр. ['damage', 'types', 'Blunt']).
-// Возвращает контейнер (карту, где лежит последний ключ) и саму пару, если она есть в тексте
-// (пары может не быть — унаследованное значение ещё не материализовано, см. insertKey).
+// Останавливается на первом отсутствующем в тексте ключе — какой бы глубины путь ни был,
+// а не только у последнего ключа. `container` — глубочайшая карта, реально существующая в
+// тексте; `missingPath` — хвост пути, которого в тексте нет вообще (может быть длиннее одного
+// ключа: issue #16, `damage.types.Piercing`, когда в файле нет ни `damage`, ни `types`).
+// `missingPath.length === 0` — пара найдена (класс 1, замена на месте); `=== 1` — найден только
+// контейнер последнего ключа (класс 2, insertKey); `> 1` — не найден контейнер вовсе на какой-то
+// промежуточной глубине (класс 4, insertNestedPath — материализация всей цепочки разом).
 export function findField(mapNode, fieldPath) {
   let node = mapNode;
   for (let i = 0; i < fieldPath.length - 1; i++) {
     const pair = node.items.find((p) => p.key.value === fieldPath[i]);
-    if (!pair) throw new Error(`промежуточный ключ "${fieldPath[i]}" отсутствует в тексте — материализация вложенных контейнеров не покрыта прототипом`);
+    if (!pair) return { container: node, pair: null, missingPath: fieldPath.slice(i) };
     node = pair.value;
   }
   const lastKey = fieldPath[fieldPath.length - 1];
   const pair = node.items.find((p) => p.key.value === lastKey);
-  return { container: node, pair: pair ?? null };
+  return { container: node, pair: pair ?? null, missingPath: pair ? [] : [lastKey] };
 }
 
 export function assertNotAlias(node, label) {

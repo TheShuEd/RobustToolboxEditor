@@ -83,6 +83,37 @@ export function insertComponentBlock(text, lineCounter, componentsSeq, lines, eo
   return splice(text, insertAt, insertAt, block);
 }
 
+// Класс 4 (issue #16): материализация ВСЕЙ отсутствующей цепочки контейнеров разом — не только
+// последнего ключа (класс 2), но произвольного числа промежуточных карт, которых в тексте нет
+// вообще. Пример из тикета: `damage.types.Piercing`, когда в MeleeWeapon нет ни `damage`, ни
+// `types` (реальный случай — fixtures/fireaxe.yml, FireAxeFlaming.MeleeWeapon: оба ключа
+// наследуются от родителя FireAxe, в тексте потомка отсутствуют целиком).
+//
+// Строгое обобщение insertKey: при missingPath.length === 1 генерирует ровно ту же одну
+// строку `key: value`, что и insertKey. Точка вставки — та же граница `range[2]` контейнера
+// (не последнего элемента) по тем же причинам, что в insertKey/insertComponentBlock — стоит
+// комментарий на последнем существующем поле или нет, роли не играет: вставляем ПОСЛЕ него.
+// Отступ каждого следующего уровня — на шаг больше предыдущего. Шаг — 2 пробела, не
+// предположение: это тот же эмпирически подтверждённый шаг блочного YAML SS14, что уже
+// захардкожен для тире в insertComponentBlock (fireaxe.yml подтверждает его и здесь —
+// damage: -> types: -> Blunt: в существующем тексте того же файла идут с шагом ровно 2, см.
+// demo).
+export function insertNestedPath(text, lineCounter, container, missingPath, valueRaw, eol, indentStep = 2) {
+  const items = container.items;
+  if (items.length === 0) throw new Error('пустой контейнер без единого существующего поля — колонку отступа взять неоткуда');
+  if (missingPath.length === 0) throw new Error('missingPath пуст — материализовать нечего, пара уже есть в тексте');
+  const baseCol = colAt(lineCounter, items[0].key.range[0]);
+  const insertAt = container.range[2];
+  const block = missingPath
+    .map((key, i) => {
+      const indent = ' '.repeat(baseCol - 1 + i * indentStep);
+      const isLast = i === missingPath.length - 1;
+      return `${indent}${key}:${isLast ? ` ${valueRaw}` : ''}${eol}`;
+    })
+    .join('');
+  return splice(text, insertAt, insertAt, block);
+}
+
 function lineStart(text, offset) {
   const idx = text.lastIndexOf('\n', offset - 1);
   return idx === -1 ? 0 : idx + 1;
