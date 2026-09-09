@@ -31,3 +31,23 @@ export type {
   ForkUnrecognized,
   ForkProblemCode,
 } from './fork-detection';
+
+export {
+  parsePrototypeFile,
+  positionAt,
+  resolveField,
+  cursorContextAt,
+} from './prototype-yaml';
+export type {
+  ParseResult,
+  PrototypeFile,
+  PrototypeParseError,
+  NodeRange,
+  TextPosition,
+  FieldAddress,
+  FieldResolution,
+  ResolvedField,
+  MissingField,
+  CursorContext,
+  CursorToken,
+} from './prototype-yaml';
