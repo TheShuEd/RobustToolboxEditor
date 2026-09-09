@@ -1,0 +1,17 @@
+# Everything is bundled into dist/ by esbuild; ship only that.
+.github/**
+.vscode/**
+.vscode-test/**
+.vscode-test.mjs
+out/**
+src/**
+test/**
+node_modules/**
+**/*.ts
+**/*.map
+esbuild.mjs
+eslint.config.mjs
+vitest.config.ts
+tsconfig.json
+.gitignore
+.eslintcache

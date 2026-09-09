@@ -1,0 +1,60 @@
+{
+  "name": "ss14editor",
+  "displayName": "SS14 Prototype Editor",
+  "description": "Schema-aware editing for SS14 (RobustToolbox) YAML prototypes.",
+  "version": "0.0.1",
+  "license": "MIT",
+  "publisher": "crystallpunk-14",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/crystallpunk-14/SS14Editor.git"
+  },
+  "engines": {
+    "vscode": "^1.49.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "ss14editor.inspector",
+          "name": "SS14 Inspector",
+          "type": "webview"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test:core": "vitest run",
+    "pretest:smoke": "npm run build",
+    "test:smoke": "vscode-test",
+    "test": "npm run test:core && npm run test:smoke",
+    "package": "npm run build && vsce package --no-dependencies -o ss14editor.vsix"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@types/mocha": "^10.0.9",
+    "@types/node": "^20.16.11",
+    "@types/vscode": "^1.49.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0",
+    "eslint": "^9.13.0",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.10.0",
+    "vitest": "^2.1.3"
+  }
+}
