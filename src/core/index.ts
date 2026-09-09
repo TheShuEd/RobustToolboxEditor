@@ -59,6 +59,11 @@ export {
   positionAt,
   resolveField,
   cursorContextAt,
+  replaceScalarValue,
+  replaceBlockScalarValue,
+  insertField,
+  insertComponent,
+  deleteAt,
 } from './prototype-yaml';
 export type {
   ParseResult,
@@ -72,4 +77,6 @@ export type {
   MissingField,
   CursorContext,
   CursorToken,
+  SurgicalEdit,
+  EditOutcome,
 } from './prototype-yaml';

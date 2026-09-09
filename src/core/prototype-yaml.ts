@@ -2,7 +2,7 @@
  * Prototype-file YAML core (spec #20, "Парсинг YAML" and "Хирургические правки";
  * issue #24). Pure and VS-Code-free: text in, plain data out.
  *
- * It answers the two questions every editing surface keeps asking about a
+ * It answers the three questions every editing surface keeps asking about a
  * prototype file, and shares one path resolver between them:
  *
  *   1. path -> range  ({@link resolveField}): where in the text is the field at
@@ -11,15 +11,19 @@
  *   2. offset -> context  ({@link cursorContextAt}): which prototype, component
  *      and field does an offset fall in, and is it on a key, a value, or the
  *      `type:` slot of a `components:` entry.
+ *   3. path -> surgical edit  ({@link replaceScalarValue}, {@link replaceBlockScalarValue},
+ *      {@link insertField}, {@link insertComponent}, {@link deleteAt}): one
+ *      `{ range, newText }` splice that lands the change without re-serialising
+ *      the document — a straight port of `prototype/prototype-surgical-edits`.
  *
  * Parsing rules, straight from the spec:
  *   - Strip a leading U+FEFF before parsing. Without it `yaml`@eemeli yields a
  *     document full of errors for ~9% of real fork files, losing them silently.
  *   - `yaml` (eemeli) with `keepSourceTokens: true`, `strict: false`, and a
  *     `LineCounter` for offset -> line/col. Positions here come from the AST
- *     (`node.range`); `keepSourceTokens` is pinned by the spec and kept for the
- *     surgical-edits ticket, which needs the CST (`node.srcToken`) for indent
- *     and comment ownership. This module does not read `srcToken`.
+ *     (`node.range`); `keepSourceTokens` is pinned by the spec — the deletion
+ *     edits read the CST (`node.srcToken`) for the exact marker offset and
+ *     comment ownership of a list/map item.
  *   - No incremental parser: re-parse the whole document on every edit.
  *   - Any `doc.errors` => the file is "invalid" as a whole; callers get an error
  *     flag, never a partial tree.
@@ -37,9 +41,11 @@ import {
   LineCounter,
   parseAllDocuments,
   Scalar,
+  type Alias,
   type Node,
   type Pair,
   type YAMLMap,
+  type YAMLSeq,
 } from 'yaml';
 
 // ---------------------------------------------------------------------------
@@ -250,13 +256,23 @@ function mapGet(map: YAMLMap, key: string): Node | null {
   return (findPair(map, key)?.value as Node | undefined) ?? null;
 }
 
+/** `components:` entry whose `type:` value is `type` — the engine keeps it unique. */
+function isComponentOfType(item: unknown, type: string): boolean {
+  return isMap(item) && scalarString(mapGet(item, 'type')) === type;
+}
+
+/** Index of that component within `components:`, or `-1`. */
+function findComponentIndex(entity: YAMLMap, type: string): number {
+  const components = mapGet(entity, 'components');
+  if (!isSeq(components)) return -1;
+  return components.items.findIndex((item) => isComponentOfType(item, type));
+}
+
 function findComponent(entity: YAMLMap, type: string): YAMLMap | null {
   const components = mapGet(entity, 'components');
   if (!isSeq(components)) return null;
-  for (const item of components.items) {
-    if (isMap(item) && scalarString(mapGet(item, 'type')) === type) return item;
-  }
-  return null;
+  const index = findComponentIndex(entity, type);
+  return index < 0 ? null : (components.items[index] as YAMLMap);
 }
 
 interface Descent {
@@ -513,4 +529,374 @@ export function cursorContextAt(file: PrototypeFile, offset: number): CursorCont
     token: inner.token,
     ...refMarkers(inner.node),
   };
+}
+
+// ---------------------------------------------------------------------------
+// path -> surgical edit  (spec #20 "Хирургические правки"; issue #26)
+//
+// A straight port of `prototype/prototype-surgical-edits/lib/edits.mjs`. Every
+// function returns exactly one splice against `file.text`; nothing here builds
+// or re-serialises a YAML string. The raw new text is inserted verbatim — quote
+// style is never recomputed, so a value that needs quoting after the change is
+// the caller's problem, not this module's.
+// ---------------------------------------------------------------------------
+
+/**
+ * A single splice against {@link PrototypeFile.text}: replace the half-open
+ * offset span `range` with `newText`. Because it is the only shape this module
+ * emits, comments, key order, anchors and `!type:` tags outside `range` stay
+ * byte-for-byte intact — nobody touched them.
+ */
+export interface SurgicalEdit {
+  readonly range: readonly [start: number, end: number];
+  readonly newText: string;
+}
+
+/**
+ * Result of asking for an edit.
+ *   - `edit` — a splice to apply.
+ *   - `entity-not-found` / `component-not-found` / `field-not-found` — the target
+ *     the address names is not in the text.
+ *   - `rejected` — the target exists but the edit is refused on purpose (an
+ *     alias-valued field, a block scalar handed to the plain-scalar path, a
+ *     container with no sibling key to align an inserted key to). `reason` is a
+ *     developer-facing sentence, never surfaced raw to the end user.
+ */
+export type EditOutcome =
+  | { readonly outcome: 'edit'; readonly edit: SurgicalEdit }
+  | { readonly outcome: 'entity-not-found' }
+  | { readonly outcome: 'component-not-found' }
+  | { readonly outcome: 'field-not-found' }
+  | { readonly outcome: 'rejected'; readonly reason: string };
+
+/**
+ * Block indent step. Two, measured in `prototype/prototype-surgical-edits` on
+ * `FireAxe.MeleeWeapon.damage -> types -> Blunt` (step of exactly 2 between every
+ * level) and reused there for the `insertComponentBlock` dash — not a guess.
+ */
+const INDENT_STEP = 2;
+
+function eolOf(text: string): string {
+  return text.includes('\r\n') ? '\r\n' : '\n';
+}
+
+/** Human-readable node kind for a `rejected` reason — no runtime class name. */
+function nodeKind(node: Node): string {
+  if (isAlias(node)) return 'an alias';
+  if (isMap(node)) return 'a map';
+  if (isSeq(node)) return 'a sequence';
+  if (isScalar(node)) {
+    return node.type === Scalar.BLOCK_LITERAL || node.type === Scalar.BLOCK_FOLDED
+      ? 'a block scalar'
+      : 'a scalar';
+  }
+  return 'not a scalar';
+}
+
+/** Column (0-based) at `offset` — i.e. the indent width when `offset` is a key start. */
+function columnAt(file: PrototypeFile, offset: number): number {
+  return positionAt(file, offset).character;
+}
+
+/** Offset of the start of the line `offset` sits on. */
+function lineStartAt(text: string, offset: number): number {
+  const nl = text.lastIndexOf('\n', offset - 1);
+  return nl === -1 ? 0 : nl + 1;
+}
+
+/**
+ * Start offset for deleting the FIRST item of a sequence. `lineStartAt` alone
+ * covers the "orphan indent" hazard (the CST marker offset of item 0 skips its
+ * own line indent). When the item also owns a leading comment — only the
+ * top-level prototype sequence, where the container node does not exist yet when
+ * the composer meets the comment — walk further back over the contiguous
+ * comment / blank-line block so the comment leaves with the item.
+ */
+function firstItemStart(text: string, anchor: number, ownsCommentBefore: boolean): number {
+  let ls = lineStartAt(text, anchor);
+  if (!ownsCommentBefore) return ls;
+  while (ls > 0) {
+    const prevLs = lineStartAt(text, ls - 1);
+    const prevLine = text.slice(prevLs, ls).replace(/\r?\n$/, '');
+    if (prevLine !== '' && !/^\s*#/.test(prevLine)) break;
+    ls = prevLs;
+  }
+  return ls;
+}
+
+/** `node.srcToken.items[index].start[0].offset` when `keepSourceTokens` populated it. */
+function cstItemStartOffset(node: Node, index: number): number | undefined {
+  const srcToken = (node as { srcToken?: unknown }).srcToken as
+    | { items?: ReadonlyArray<{ start?: ReadonlyArray<{ offset?: number }> }> }
+    | undefined;
+  return srcToken?.items?.[index]?.start?.[0]?.offset;
+}
+
+/**
+ * `{ ok: true, ... }` / `{ ok: false, result }` — the tagged-discriminant idiom
+ * this module and its siblings use for "a value, or the outcome to return".
+ */
+type Lookup<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly result: EditOutcome };
+
+/** The prototype map at `entityIndex`, or the outcome to return when it is not there. */
+function lookupEntity(file: PrototypeFile, entityIndex: number): Lookup<YAMLMap> {
+  const { root } = must(file);
+  const entity = isSeq(root) ? root.items[entityIndex] : undefined;
+  if (!isMap(entity)) return { ok: false, result: { outcome: 'entity-not-found' } };
+  return { ok: true, value: entity };
+}
+
+/** Resolve `address` to its container map (the component map, or the entity map itself). */
+function lookupContainer(file: PrototypeFile, address: FieldAddress): Lookup<YAMLMap> {
+  const entity = lookupEntity(file, address.entityIndex);
+  if (!entity.ok) return entity;
+  if (address.component === undefined) return entity;
+
+  const component = findComponent(entity.value, address.component);
+  if (!component) return { ok: false, result: { outcome: 'component-not-found' } };
+  return { ok: true, value: component };
+}
+
+/** The value node the address points at, or `null` for a key with nothing after it. */
+function valueOf(descent: Descent, container: Node): Node | null {
+  if (descent.pair) return (descent.pair.value as Node | undefined) ?? null;
+  return container; // fieldPath was empty — the container is the "value"
+}
+
+/** Shared prelude for the two value-replacing edits: resolve the address to a value node. */
+function lookupValue(file: PrototypeFile, address: FieldAddress): Lookup<Node> {
+  const container = lookupContainer(file, address);
+  if (!container.ok) return container;
+
+  const descent = findField(container.value, address.fieldPath);
+  if (descent.missingPath.length > 0) return { ok: false, result: { outcome: 'field-not-found' } };
+
+  const value = valueOf(descent, descent.container);
+  if (value == null) {
+    return { ok: false, result: { outcome: 'rejected', reason: 'the key has no value to replace' } };
+  }
+  return { ok: true, value };
+}
+
+function aliasReason(value: Alias): string {
+  return (
+    `field resolves to the alias *${value.source}; editing it in place would rewrite only this ` +
+    `reference and break the tie to its anchor. Detach it from the anchor first.`
+  );
+}
+
+/**
+ * Class 1 — replace a scalar value in place. `range` is the value text only: no
+ * trailing whitespace, comment, `&anchor` marker or `!type:` tag. An anchored
+ * scalar edits fine (aliases pick the new text up on re-parse); an alias-valued
+ * field is `rejected`; a block scalar is `rejected` towards {@link replaceBlockScalarValue}.
+ */
+export function replaceScalarValue(
+  file: PrototypeFile,
+  address: FieldAddress,
+  newRaw: string,
+): EditOutcome {
+  const found = lookupValue(file, address);
+  if (!found.ok) return found.result;
+  const { value } = found;
+
+  if (isAlias(value)) return { outcome: 'rejected', reason: aliasReason(value) };
+  if (isScalar(value) && (value.type === Scalar.BLOCK_LITERAL || value.type === Scalar.BLOCK_FOLDED)) {
+    return { outcome: 'rejected', reason: 'value is a block scalar; use replaceBlockScalarValue' };
+  }
+  if (!isScalar(value)) {
+    return { outcome: 'rejected', reason: `value is ${nodeKind(value)}, not a scalar` };
+  }
+
+  const range = rangeOf(value);
+  return { outcome: 'edit', edit: { range: [range[0], range[1]], newText: newRaw } };
+}
+
+/**
+ * Block scalar (`|`, `>`, `|-`, …) — the node range covers the indicator line and
+ * every content line as one raw span, so a plain splice would flatten it.
+ * Rebuild instead: keep the exact header line (any same-line comment with it),
+ * reuse the real content indent read from the first non-blank content line
+ * (never assume 2/4), re-indent each new line onto it. The splice runs to the
+ * node's `range[2]`, so trailing blank lines inside that range are dropped —
+ * faithful to the donor prototype.
+ */
+export function replaceBlockScalarValue(
+  file: PrototypeFile,
+  address: FieldAddress,
+  newLines: readonly string[],
+): EditOutcome {
+  const found = lookupValue(file, address);
+  if (!found.ok) return found.result;
+  const { value } = found;
+
+  if (isAlias(value)) return { outcome: 'rejected', reason: aliasReason(value) };
+  if (
+    !isScalar(value) ||
+    (value.type !== Scalar.BLOCK_LITERAL && value.type !== Scalar.BLOCK_FOLDED)
+  ) {
+    return { outcome: 'rejected', reason: `value is ${nodeKind(value)}, not a block scalar` };
+  }
+
+  const { text } = must(file);
+  const eol = eolOf(text);
+  const range = rangeOf(value);
+  const raw = text.slice(range[0], range[1]);
+  const nl = raw.indexOf('\n');
+  const header = (nl === -1 ? raw : raw.slice(0, nl)).replace(/\r$/, '');
+  const firstContentLine = (nl === -1 ? '' : raw.slice(nl + 1))
+    .split('\n')
+    .find((line) => line.trim() !== '');
+  const indent = firstContentLine?.match(/^( +)/)?.[1] ?? ' '.repeat(columnAt(file, range[0]) + INDENT_STEP);
+  const body = newLines.map((line) => `${indent}${line}${eol}`).join('');
+
+  return { outcome: 'edit', edit: { range: [range[0], range[2]], newText: `${header}${eol}${body}` } };
+}
+
+/**
+ * Classes 2 & 4 — materialise a field that is only inherited: a single missing
+ * leaf key, or a whole missing container chain. At depth 1 this emits byte-for-
+ * byte what a dedicated "insert one key" would. Insertion point is the end of
+ * the deepest container that DOES exist (`range[2]`), which sits after any
+ * standalone trailing comment that the CST hangs on the container — so the
+ * comment stays put. New keys align to the first sibling key's column, each
+ * deeper level indented one more {@link INDENT_STEP}.
+ */
+export function insertField(
+  file: PrototypeFile,
+  address: FieldAddress,
+  newRaw: string,
+): EditOutcome {
+  const outer = lookupContainer(file, address);
+  if (!outer.ok) return outer.result;
+
+  const descent = findField(outer.value, address.fieldPath);
+  if (descent.missingPath.length === 0) {
+    return { outcome: 'rejected', reason: 'field is already in the text; use replaceScalarValue' };
+  }
+  const container = descent.container;
+  if (!isMap(container) || container.items.length === 0) {
+    return {
+      outcome: 'rejected',
+      reason: 'target container is not a non-empty block map — no sibling key to align to',
+    };
+  }
+
+  const { text } = must(file);
+  const eol = eolOf(text);
+  const baseCol = columnAt(file, rangeOf(container.items[0].key as Node)[0]);
+  const at = rangeOf(container)[2];
+  const block = descent.missingPath
+    .map((key, i) => {
+      const pad = ' '.repeat(baseCol + i * INDENT_STEP);
+      const isLeaf = i === descent.missingPath.length - 1;
+      return `${pad}${key}:${isLeaf ? ` ${newRaw}` : ''}${eol}`;
+    })
+    .join('');
+
+  return { outcome: 'edit', edit: { range: [at, at], newText: block } };
+}
+
+/**
+ * Class 3 — append a whole `- type: X` block to an entity's `components:`.
+ * `lines` is the block body already split into lines, `type: X` first. Insertion
+ * point is the end of the sequence itself (`range[2]`), past any standalone
+ * comment the CST hangs on it. The dash sits {@link INDENT_STEP} columns left of
+ * the field column, taken from the first existing component's first field.
+ */
+export function insertComponent(
+  file: PrototypeFile,
+  entityIndex: number,
+  lines: readonly string[],
+): EditOutcome {
+  const entity = lookupEntity(file, entityIndex);
+  if (!entity.ok) return entity.result;
+
+  if (lines.length === 0) return { outcome: 'rejected', reason: 'no lines to insert' };
+
+  const { text } = must(file);
+  const seq = findPair(entity.value, 'components')?.value ?? null;
+  const first = isSeq(seq) ? seq.items[0] : null;
+  if (!isSeq(seq) || !isMap(first) || first.items.length === 0) {
+    return {
+      outcome: 'rejected',
+      reason: 'entity has no non-empty components: sequence to append to',
+    };
+  }
+
+  const fieldCol = columnAt(file, rangeOf(first.items[0].key as Node)[0]);
+  if (fieldCol < INDENT_STEP) {
+    return { outcome: 'rejected', reason: 'component fields sit too far left for a dash two columns in' };
+  }
+
+  const eol = eolOf(text);
+  const at = rangeOf(seq)[2];
+  const [head, ...rest] = lines;
+  const newText =
+    `${' '.repeat(fieldCol - INDENT_STEP)}- ${head}${eol}` +
+    rest.map((line) => `${' '.repeat(fieldCol)}${line}${eol}`).join('');
+
+  return { outcome: 'edit', edit: { range: [at, at], newText } };
+}
+
+function deleteSeqItemEdit(
+  text: string,
+  seq: YAMLSeq,
+  index: number,
+  notFound: EditOutcome,
+): EditOutcome {
+  const item = seq.items[index] as Node | undefined;
+  if (!item) return notFound;
+  const anchor = cstItemStartOffset(seq, index) ?? rangeOf(item)[0];
+  const start =
+    index === 0 ? firstItemStart(text, anchor, Boolean(item.commentBefore)) : anchor;
+  return { outcome: 'edit', edit: { range: [start, rangeOf(item)[2]], newText: '' } };
+}
+
+function deleteMapKeyEdit(text: string, map: YAMLMap, key: string): EditOutcome {
+  const index = map.items.findIndex((pair) => scalarString(pair.key) === key);
+  if (index < 0) return { outcome: 'field-not-found' };
+  const pair = map.items[index];
+  const keyStart = rangeOf(pair.key as Node)[0];
+  const start = index === 0 ? lineStartAt(text, keyStart) : cstItemStartOffset(map, index) ?? keyStart;
+  const endNode = (pair.value as Node | null) ?? (pair.key as Node);
+  return { outcome: 'edit', edit: { range: [start, rangeOf(endNode)[2]], newText: '' } };
+}
+
+/**
+ * Delete what `address` names and the comment the CST physically ties to it:
+ *   - `fieldPath` empty, no `component` — a whole prototype from the top-level
+ *     sequence (special-cased for `index === 0`: leading comment leaves with it,
+ *     start snaps to the marker's line so a nested list below is not orphaned).
+ *   - `fieldPath` empty, `component` set — that component from `components:`.
+ *   - `fieldPath` non-empty — that key from its map (entity or component).
+ *
+ * No comment-retention policy: a container comment survives deletion of the
+ * first item because the CST puts it on the container; an item's own leading
+ * comment goes with the item. That asymmetry is the intended final behaviour.
+ */
+export function deleteAt(file: PrototypeFile, address: FieldAddress): EditOutcome {
+  const { text, root } = must(file);
+  const entity = lookupEntity(file, address.entityIndex);
+  if (!entity.ok) return entity.result;
+
+  if (address.component === undefined && address.fieldPath.length === 0) {
+    // isSeq(root) is implied — lookupEntity found a map inside it.
+    return deleteSeqItemEdit(text, root as YAMLSeq, address.entityIndex, { outcome: 'entity-not-found' });
+  }
+
+  if (address.component !== undefined && address.fieldPath.length === 0) {
+    const seq = findPair(entity.value, 'components')?.value ?? null;
+    const index = findComponentIndex(entity.value, address.component);
+    if (!isSeq(seq) || index < 0) return { outcome: 'component-not-found' };
+    return deleteSeqItemEdit(text, seq, index, { outcome: 'component-not-found' });
+  }
+
+  const container = lookupContainer(file, address);
+  if (!container.ok) return container.result;
+  const descent = findField(container.value, address.fieldPath);
+  if (descent.missingPath.length > 0 || !descent.pair || !isMap(descent.container)) {
+    return { outcome: 'field-not-found' };
+  }
+  return deleteMapKeyEdit(text, descent.container, address.fieldPath[address.fieldPath.length - 1]);
 }
