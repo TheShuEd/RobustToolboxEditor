@@ -159,20 +159,23 @@ describe.each([
     '    attackRate: 1',
   ];
 
-  it('offers component fields on a half-typed key with no colon', () => {
+  it('offers component fields on a half-typed key with no colon, inserting the colon', () => {
     const { text, offset } = atEndOf([...meleeBlock, '    swingL']);
 
-    const found = completionsAt(text, offset, SCHEMA).map((c) => c.label);
-    expect(found).toContain('swingLeft');
-    expect(found).not.toContain('attackRate'); // sibling already written
+    const candidates = completionsAt(text, offset, SCHEMA);
+    const swingLeft = candidates.find((c) => c.label === 'swingLeft');
+    expect(swingLeft).toMatchObject({ label: 'swingLeft', kind: 'field', insertText: 'swingLeft: ' });
+    expect(candidates.map((c) => c.label)).not.toContain('attackRate'); // sibling already written
   });
 
   it('offers component fields on a blank indented line (Ctrl+Space)', () => {
     const { text, offset } = atEndOf([...meleeBlock, '    ']);
 
-    const found = completionsAt(text, offset, SCHEMA).map((c) => c.label);
-    expect(found).toEqual(expect.arrayContaining(['swingLeft', 'range', 'damage']));
-    expect(found).not.toContain('attackRate');
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates.map((c) => c.label)).toEqual(expect.arrayContaining(['swingLeft', 'range', 'damage']));
+    expect(candidates.map((c) => c.label)).not.toContain('attackRate');
+    // Every field carries its own colon so the caret lands on the value.
+    expect(candidates.every((c) => c.insertText === `${c.label}: `)).toBe(true);
   });
 
   it('offers prototype fields on a blank line at the top level', () => {
@@ -210,13 +213,15 @@ describe.each([
     expect(completionsAt(text, offset, SCHEMA)).toEqual([]);
   });
 
-  it('leaves an existing `key: value` line to the direct parse', () => {
+  it('leaves an existing `key: value` line to the direct parse, without a second colon', () => {
     const { text } = atEndOf([...meleeBlock, '    swingLeft: true']);
     const offset = text.indexOf('    swingLeft') + '    swing'.length;
 
-    const found = completionsAt(text, offset, SCHEMA).map((c) => c.label);
-    expect(found).toContain('swingLeft');
-    expect(found).not.toContain('attackRate');
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates.map((c) => c.label)).toContain('swingLeft');
+    expect(candidates.map((c) => c.label)).not.toContain('attackRate');
+    // The line already has its colon — candidates must not carry another.
+    expect(candidates.every((c) => c.insertText === undefined)).toBe(true);
   });
 
   it('still offers enum values on a value slot', () => {

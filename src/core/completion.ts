@@ -92,13 +92,13 @@ export function completionsAt(
 ): CompletionCandidate[] {
   const resolved = resolveCursor(text, offset, schema);
   if (!resolved) return [];
-  const { ctx, insertPrefix } = resolved;
+  const { ctx, insertPrefix, keyNeedsColon } = resolved;
 
   switch (ctx.token.kind) {
     case 'component-type':
       return componentNameCandidates(schema, insertPrefix);
     case 'key':
-      return fieldKeyCandidates(ctx, schema);
+      return fieldKeyCandidates(ctx, schema, keyNeedsColon);
     case 'value':
       return onPrototypeTypeSlot(ctx)
         ? prototypeNameCandidates(schema, insertPrefix)
@@ -147,6 +147,11 @@ interface ResolvedCursor {
   readonly ctx: CursorContext;
   /** Prepended to a candidate's insert text when the recovery synthesized `type:`. */
   readonly insertPrefix: string;
+  /**
+   * The caret line has no `:` yet, so a field-key candidate should insert its
+   * own — `swingLeft` -> `swingLeft: ` — landing the caret on the value slot.
+   */
+  readonly keyNeedsColon: boolean;
 }
 
 /**
@@ -163,12 +168,13 @@ function resolveCursor(text: string, offset: number, schema: SchemaRoot): Resolv
   const direct = parsePrototypeFile(text);
   const directCtx = direct.ok ? contextAt(direct, offset, schema) : null;
   const line = lineAround(text, offset);
+  const keyNeedsColon = !line.includes(':');
 
-  const rewrites = line.includes(':')
-    ? directCtx === null || directCtx.token.kind === 'none'
+  const rewrites = keyNeedsColon
+    ? [withTypeKey(text, offset, line), withSentinelKey(text, offset, line)]
+    : directCtx === null || directCtx.token.kind === 'none'
       ? [withValueSentinel(text, offset, line)]
-      : []
-    : [withTypeKey(text, offset, line), withSentinelKey(text, offset, line)];
+      : [];
 
   for (const rewrite of rewrites) {
     if (!rewrite) continue;
@@ -176,11 +182,11 @@ function resolveCursor(text: string, offset: number, schema: SchemaRoot): Resolv
     if (!retry.ok) continue;
     const ctx = contextAt(retry, rewrite.offset, schema);
     if (rewrite.expect.includes(ctx.token.kind)) {
-      return { ctx, insertPrefix: rewrite.insertPrefix };
+      return { ctx, insertPrefix: rewrite.insertPrefix, keyNeedsColon };
     }
   }
 
-  return directCtx ? { ctx: directCtx, insertPrefix: '' } : null;
+  return directCtx ? { ctx: directCtx, insertPrefix: '', keyNeedsColon } : null;
 }
 
 /**
@@ -353,7 +359,11 @@ function named(
 // 2–4. field keys (component / nested DataDefinition / prototype)
 // ---------------------------------------------------------------------------
 
-function fieldKeyCandidates(ctx: CursorContext, schema: SchemaRoot): CompletionCandidate[] {
+function fieldKeyCandidates(
+  ctx: CursorContext,
+  schema: SchemaRoot,
+  needsColon: boolean,
+): CompletionCandidate[] {
   const container = containerFields(ctx, schema);
   if (!container) return [];
 
@@ -366,6 +376,9 @@ function fieldKeyCandidates(ctx: CursorContext, schema: SchemaRoot): CompletionC
       label: field.tag,
       kind: 'field' as const,
       detail: fieldDetail(field),
+      // The caret line has no `:` yet, so carry one in the insert text and leave
+      // the caret on the value slot after it.
+      ...(needsColon ? { insertText: `${field.tag}: ` } : {}),
     }))
     .sort(byLabel);
 }
