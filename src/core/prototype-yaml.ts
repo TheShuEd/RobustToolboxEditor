@@ -152,6 +152,13 @@ export interface CursorContext {
   readonly component: string | null;
   /** Key chain to the field under the offset, including the field itself. Empty when on none. */
   readonly fieldPath: readonly string[];
+  /**
+   * Keys already written in the block map the offset sits in — the map that
+   * directly holds `fieldPath`'s last key, or the innermost map the offset is
+   * inside. Lets a field-name completion drop siblings that are already present
+   * without re-parsing the document. Empty when the offset is not inside a map.
+   */
+  readonly containerKeys: readonly string[];
   readonly token: CursorToken;
   /** Set when the value node under the offset carries `&name`. */
   readonly anchor?: string;
@@ -250,6 +257,16 @@ function findPair(map: YAMLMap, key: string): Pair | null {
     if (scalarString(pair.key) === key) return pair as Pair;
   }
   return null;
+}
+
+/** Scalar-key names of a block map, in source order; non-scalar keys are skipped. */
+function keysOf(map: YAMLMap): string[] {
+  const keys: string[] = [];
+  for (const pair of map.items) {
+    const key = scalarString(pair.key);
+    if (key !== undefined) keys.push(key);
+  }
+  return keys;
 }
 
 function mapGet(map: YAMLMap, key: string): Node | null {
@@ -405,6 +422,7 @@ const NOWHERE: CursorContext = {
   prototypeType: null,
   component: null,
   fieldPath: [],
+  containerKeys: [],
   token: { kind: 'none' },
 };
 
@@ -433,6 +451,8 @@ interface DescendResult {
   chain: string[];
   token: CursorToken;
   node: Node | null;
+  /** Keys of the innermost block map `offset` is inside — see {@link CursorContext.containerKeys}. */
+  containerKeys: string[];
 }
 
 /**
@@ -444,6 +464,7 @@ interface DescendResult {
 function descend(map: YAMLMap, offset: number): DescendResult {
   const items = map.items;
   const mapEnd = map.range?.[2] ?? Number.MAX_SAFE_INTEGER;
+  const containerKeys = keysOf(map);
 
   for (let i = 0; i < items.length; i++) {
     const pair = items[i];
@@ -460,6 +481,7 @@ function descend(map: YAMLMap, offset: number): DescendResult {
         chain: [keyName],
         token: { kind: 'key', name: keyName },
         node: (pair.value as Node | undefined) ?? null,
+        containerKeys,
       };
     }
 
@@ -471,9 +493,9 @@ function descend(map: YAMLMap, offset: number): DescendResult {
         return sub;
       }
     }
-    return { chain: [keyName], token: { kind: 'value' }, node: value };
+    return { chain: [keyName], token: { kind: 'value' }, node: value, containerKeys };
   }
-  return { chain: [], token: { kind: 'none' }, node: null };
+  return { chain: [], token: { kind: 'none' }, node: null, containerKeys };
 }
 
 /**
@@ -494,21 +516,33 @@ export function cursorContextAt(file: PrototypeFile, offset: number): CursorCont
   const shell = { entityIndex, prototypeType };
 
   if (!isMap(entity)) {
-    return { ...shell, component: null, fieldPath: [], token: { kind: 'none' } };
+    return { ...shell, component: null, fieldPath: [], containerKeys: [], token: { kind: 'none' } };
   }
 
   const componentsSeq = findPair(entity, 'components')?.value ?? null;
   if (isSeq(componentsSeq) && spans(componentsSeq, offset)) {
     const componentItem = componentsSeq.items.find((item) => spans(item, offset));
     if (!isMap(componentItem)) {
-      return { ...shell, component: null, fieldPath: ['components'], token: { kind: 'none' } };
+      return {
+        ...shell,
+        component: null,
+        fieldPath: ['components'],
+        containerKeys: [],
+        token: { kind: 'none' },
+      };
     }
 
     const typePair = findPair(componentItem, 'type');
     const component = typePair ? scalarString(typePair.value) ?? null : null;
 
     if (typePair && onComponentTypeSlot(typePair, offset, text)) {
-      return { ...shell, component, fieldPath: [], token: { kind: 'component-type', text: component } };
+      return {
+        ...shell,
+        component,
+        fieldPath: [],
+        containerKeys: [],
+        token: { kind: 'component-type', text: component },
+      };
     }
 
     const inner = descend(componentItem, offset);
@@ -516,6 +550,7 @@ export function cursorContextAt(file: PrototypeFile, offset: number): CursorCont
       ...shell,
       component,
       fieldPath: inner.chain,
+      containerKeys: inner.containerKeys,
       token: inner.token,
       ...refMarkers(inner.node),
     };
@@ -526,6 +561,7 @@ export function cursorContextAt(file: PrototypeFile, offset: number): CursorCont
     ...shell,
     component: null,
     fieldPath: inner.chain,
+    containerKeys: inner.containerKeys,
     token: inner.token,
     ...refMarkers(inner.node),
   };

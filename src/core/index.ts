@@ -54,6 +54,9 @@ export type {
   EnumConstantEntry,
 } from './schema-contract';
 
+export { completionsAt } from './completion';
+export type { CompletionCandidate } from './completion';
+
 export {
   parsePrototypeFile,
   positionAt,

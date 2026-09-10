@@ -1,0 +1,21 @@
+# Hand-built fixture for the five autocomplete contexts (issue #27). Every
+# prototype, component and field here is real in the crystall-edge schema
+# snapshot (schema-cli/fixtures/metadata.json) so the core tests can assert on
+# concrete candidate labels.
+
+- type: reagent
+  id: TestChem
+  name: test chem
+  boilingPoint: 300
+  slipData:
+    superSlippery: true
+    slipFriction: 1.0
+
+- type: entity
+  id: TestActionEntity
+  components:
+  - type: Tag
+    tags:
+    - TestTag
+  - type: Action
+    itemIconStyle: BigAction

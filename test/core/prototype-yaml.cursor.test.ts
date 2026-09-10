@@ -47,6 +47,23 @@ describe('cursorContextAt — offset to context', () => {
     expect(ctx.token).toEqual({ kind: 'key', name: 'swingLeft' });
   });
 
+  it('reports the sibling keys of the block the caret is in', () => {
+    const shallow = cursorContextAt(fireaxe, fireaxe.text.indexOf('swingLeft: true') + 2);
+    expect(shallow.containerKeys).toEqual([
+      'type',
+      'wideAnimationRotation',
+      'swingLeft',
+      'attackRate',
+      'damage',
+      'soundHit',
+    ]);
+
+    const nested = cursorContextAt(fireaxe, fireaxe.text.indexOf('Blunt: 5') + 'Blunt: '.length);
+    expect(nested.containerKeys).toEqual(['Blunt', 'Slash', 'Structural']);
+
+    expect(cursorContextAt(fireaxe, fireaxe.text.length + 50).containerKeys).toEqual([]);
+  });
+
   it('on the value of a top-level prototype field', () => {
     const offset = fireaxe.text.indexOf('Truly, the weapon') + 3;
     const ctx = cursorContextAt(fireaxe, offset);

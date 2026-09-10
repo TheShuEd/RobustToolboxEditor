@@ -1,4 +1,5 @@
-# Test fixtures are byte-exact 1:1 copies of real crystall-edge prototype
-# files (CRLF line endings, one carries a UTF-8 BOM). Keep them verbatim so
+# Most test fixtures are byte-exact 1:1 copies of real crystall-edge prototype
+# files (CRLF line endings, one carries a UTF-8 BOM); `completion_contexts.yml`
+# is hand-built (issue #27) but kept CRLF to match. Keep them all verbatim so
 # the core offset tests stay meaningful across platforms.
 test/fixtures/prototypes/*.yml -text
