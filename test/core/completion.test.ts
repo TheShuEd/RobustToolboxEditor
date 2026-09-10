@@ -125,7 +125,7 @@ describe('completionsAt — enum values', () => {
 
     const candidates = completionsAt(file.text, offset, SCHEMA);
     expect(candidates.map((c) => c.label).sort()).toEqual(['BigAction', 'BigItem', 'NoItem']);
-    expect(candidates.every((c) => c.kind === 'enum-value')).toBe(true);
+    expect(candidates.every((c) => c.kind === 'value')).toBe(true);
   });
 
   it('is empty on a non-enum field value', () => {
@@ -320,6 +320,140 @@ describe.each([
     const candidates = completionsAt(text, offset, SCHEMA);
     expect(candidates.map((c) => c.label)).toEqual(expect.arrayContaining(['Sprite', 'MeleeWeapon']));
     expect(candidates.every((c) => c.kind === 'component')).toBe(true);
+  });
+});
+
+/**
+ * `ComponentRegistry` is an ordinary field type, not a structural feature of the
+ * document. `entity` calls its registry `components`, but the engine has ten such
+ * tags and a prototype may declare several — so the completion must key off
+ * `fieldKind`, never off the name `components`.
+ */
+describe('completionsAt — component registries other than `components`', () => {
+  const borg = [
+    '- type: borgType',
+    '  id: X',
+    '  addComponents:',
+    '  - type: Sprite',
+    '    sprite: a.rsi',
+  ];
+
+  it('offers component names in `addComponents:` of borgType', () => {
+    const text = borg.join('\n') + '\n';
+    const offset = text.indexOf('- type: Sprite') + '- type: Spr'.length;
+
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates.map((c) => c.label)).toEqual(expect.arrayContaining(['Sprite', 'MeleeWeapon']));
+    expect(candidates.every((c) => c.kind === 'component')).toBe(true);
+  });
+
+  it('offers that component\'s fields inside `addComponents:`', () => {
+    const text = borg.join('\n') + '\n';
+    const offset = text.indexOf('    sprite: a.rsi') + '    spr'.length;
+
+    const found = completionsAt(text, offset, SCHEMA).map((c) => c.label);
+    expect(found).toEqual(expect.arrayContaining(['sprite', 'color', 'layers']));
+    // Not borgType's own fields — the caret is inside a component.
+    expect(found).not.toContain('addComponents');
+  });
+
+  it('offers component names on a bare `- ` in `addComponents:`', () => {
+    const text = borg.join('\n') + '\n  - \n';
+    const offset = text.length - 1;
+
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates.every((c) => c.kind === 'component')).toBe(true);
+    expect(candidates.find((c) => c.label === 'Sprite')?.insertText).toBe('type: Sprite');
+  });
+
+  it('handles a prototype declaring more than one registry', () => {
+    const text =
+      ['- type: antagSpecifier', '  id: X', '  mindComponents:', '  - type: Sprite', '    sprite: a.rsi'].join('\n') +
+      '\n';
+    const offset = text.indexOf('    sprite: a.rsi') + '    spr'.length;
+
+    expect(completionsAt(text, offset, SCHEMA).map((c) => c.label)).toContain('color');
+  });
+
+  it('does not read a `components:` key as a registry on a prototype that has no such field', () => {
+    // borgType's registry is `addComponents`; a literal `components:` here is not one.
+    const text =
+      ['- type: borgType', '  id: X', '  components:', '  - type: Sprite', '    sprite: a.rsi'].join('\n') + '\n';
+    const offset = text.indexOf('    sprite: a.rsi') + '    spr'.length;
+
+    expect(completionsAt(text, offset, SCHEMA)).toEqual([]);
+  });
+});
+
+/**
+ * Value candidates are chosen by the field's declared `fieldKind`, so every kind
+ * whose whole domain is in the schema is served the same way — `boolean` is not
+ * a special case bolted next to `enum`.
+ */
+describe('completionsAt — values by field kind', () => {
+  /** `lines` with the caret at the end of the last one. */
+  function atEnd(lines: readonly string[]): { text: string; offset: number } {
+    const joined = lines.join('\n');
+    return { text: joined + '\n', offset: joined.length };
+  }
+
+  it('offers true/false on a boolean component field', () => {
+    const { text, offset } = atEnd([
+      '- type: entity',
+      '  id: X',
+      '  components:',
+      '  - type: MeleeWeapon',
+      '    swingLeft: ',
+    ]);
+
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates).toEqual([
+      { label: 'false', kind: 'value', detail: 'Boolean' },
+      { label: 'true', kind: 'value', detail: 'Boolean' },
+    ]);
+  });
+
+  it('offers true/false on a boolean prototype field', () => {
+    const { text, offset } = atEnd(['- type: entity', '  id: X', '  abstract: ']);
+    expect(completionsAt(text, offset, SCHEMA).map((c) => c.label)).toEqual(['false', 'true']);
+  });
+
+  it('offers the enum members of a `flags` field', () => {
+    const { text, offset } = atEnd([
+      '- type: entity',
+      '  id: X',
+      '  components:',
+      '  - type: StorageVoiceControl',
+      '    allowedSlots: ',
+    ]);
+
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates.map((c) => c.label)).toEqual(expect.arrayContaining(['HEAD', 'EYES', 'MASK']));
+    // The assembly-qualified generic type still reduces to one word.
+    expect(candidates[0]?.detail).toBe('SlotFlags');
+  });
+
+  it('reads a list-of-enum field through its element type', () => {
+    const { text, offset } = atEnd([
+      '- type: entity',
+      '  id: X',
+      '  components:',
+      '  - type: GasLeakRule',
+      '    leakableGases: ',
+    ]);
+
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates.map((c) => c.label)).toEqual(expect.arrayContaining(['Oxygen', 'Plasma']));
+    expect(candidates.every((c) => c.detail === 'Gas')).toBe(true);
+  });
+
+  it.each([
+    ['float', ['  - type: MeleeWeapon', '    attackRate: ']],
+    ['text', ['  - type: Sprite', '    sprite: ']],
+    ['protoId', ['  - type: Item', '    size: ']],
+  ])('offers nothing for a %s field, whose domain is not in the schema', (_kind, tail) => {
+    const { text, offset } = atEnd(['- type: entity', '  id: X', '  components:', ...tail]);
+    expect(completionsAt(text, offset, SCHEMA)).toEqual([]);
   });
 });
 

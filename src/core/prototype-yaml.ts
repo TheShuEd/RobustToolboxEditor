@@ -417,6 +417,19 @@ export function resolveField(file: PrototypeFile, address: FieldAddress): FieldR
 // offset -> context
 // ---------------------------------------------------------------------------
 
+/** The registry-keyed sequence `offset` falls in, if any, and the key naming it. */
+function findComponentRegistry(
+  entity: YAMLMap,
+  offset: number,
+  registryKeys: readonly string[],
+): { readonly key: string; readonly seq: YAMLSeq } | null {
+  for (const key of registryKeys) {
+    const value = findPair(entity, key)?.value ?? null;
+    if (isSeq(value) && spans(value, offset)) return { key, seq: value };
+  }
+  return null;
+}
+
 const NOWHERE: CursorContext = {
   entityIndex: null,
   prototypeType: null,
@@ -499,12 +512,35 @@ function descend(map: YAMLMap, offset: number): DescendResult {
 }
 
 /**
- * Describe where `offset` sits: which prototype and (inside `components:`) which
- * component, the key chain to the field, and whether the caret is on a key, a
- * value, or the `type:` slot of a component entry — plus alias/anchor marks on
- * the value under it. Returns {@link NOWHERE} for an offset outside every prototype.
+ * The registry key assumed when the caller names none. `components` is only the
+ * commonest `ComponentRegistry`-typed field, not a privileged one — the engine
+ * has ten (`addComponents` on `borgType`, `mindComponents` on `antagSpecifier`,
+ * …) and a prototype may declare several. A caller holding the schema should
+ * pass the real set; this default just keeps the schema-free callers working.
  */
-export function cursorContextAt(file: PrototypeFile, offset: number): CursorContext {
+const DEFAULT_COMPONENT_REGISTRY_KEYS: readonly string[] = ['components'];
+
+export interface CursorContextOptions {
+  /**
+   * Prototype-level keys whose value is a `ComponentRegistry` — a sequence of
+   * `- type: X` component blocks. Anything in this list is read as a component
+   * registry; everything else is walked as an ordinary field.
+   */
+  readonly componentRegistryKeys?: readonly string[];
+}
+
+/**
+ * Describe where `offset` sits: which prototype and (inside a component
+ * registry) which component, the key chain to the field, and whether the caret
+ * is on a key, a value, or the `type:` slot of a component entry — plus
+ * alias/anchor marks on the value under it. Returns {@link NOWHERE} for an
+ * offset outside every prototype.
+ */
+export function cursorContextAt(
+  file: PrototypeFile,
+  offset: number,
+  options?: CursorContextOptions,
+): CursorContext {
   const { root, text } = must(file);
   if (!isSeq(root)) return NOWHERE;
 
@@ -519,14 +555,18 @@ export function cursorContextAt(file: PrototypeFile, offset: number): CursorCont
     return { ...shell, component: null, fieldPath: [], containerKeys: [], token: { kind: 'none' } };
   }
 
-  const componentsSeq = findPair(entity, 'components')?.value ?? null;
-  if (isSeq(componentsSeq) && spans(componentsSeq, offset)) {
-    const componentItem = componentsSeq.items.find((item) => spans(item, offset));
+  const registry = findComponentRegistry(
+    entity,
+    offset,
+    options?.componentRegistryKeys ?? DEFAULT_COMPONENT_REGISTRY_KEYS,
+  );
+  if (registry) {
+    const componentItem = registry.seq.items.find((item) => spans(item, offset));
     if (!isMap(componentItem)) {
       return {
         ...shell,
         component: null,
-        fieldPath: ['components'],
+        fieldPath: [registry.key],
         containerKeys: [],
         token: { kind: 'none' },
       };

@@ -15,7 +15,8 @@
  *   4. prototype fields  — on a key at the top level of the prototype, keyed by
  *      its `[Prototype]` type (`entity` -> `EntityPrototype`, `reagent` ->
  *      `ReagentPrototype`, …);
- *   5. enum values       — on the value slot of an enum-typed field;
+ *   5. field values      — on a value slot, for the field kinds whose whole
+ *      domain the schema carries: `boolean`, and the enum-backed `enum`/`flags`;
  *   6. prototype types   — on the `type:` value slot of the prototype itself,
  *      one level out from (1).
  *
@@ -50,7 +51,12 @@
  * one writes the key the document is still missing.
  */
 
-import { cursorContextAt, parsePrototypeFile, type CursorContext } from './prototype-yaml';
+import {
+  cursorContextAt,
+  parsePrototypeFile,
+  type CursorContext,
+  type PrototypeFile,
+} from './prototype-yaml';
 import type {
   DataDefinitionMetadata,
   FieldMetadata,
@@ -62,7 +68,7 @@ import type {
 export interface CompletionCandidate {
   /** The name shown in the list — a prototype/component name, a field key, an enum member. */
   readonly label: string;
-  readonly kind: 'prototype' | 'component' | 'field' | 'enum-value';
+  readonly kind: 'prototype' | 'component' | 'field' | 'value';
   /** Short right-aligned signature: a declared type, a class name, or an enum type. */
   readonly detail?: string;
   /**
@@ -84,7 +90,7 @@ export function completionsAt(
   offset: number,
   schema: SchemaRoot,
 ): CompletionCandidate[] {
-  const resolved = resolveCursor(text, offset);
+  const resolved = resolveCursor(text, offset, schema);
   if (!resolved) return [];
   const { ctx, insertPrefix } = resolved;
 
@@ -96,7 +102,7 @@ export function completionsAt(
     case 'value':
       return onPrototypeTypeSlot(ctx)
         ? prototypeNameCandidates(schema, insertPrefix)
-        : enumValueCandidates(ctx, schema);
+        : valueCandidates(ctx, schema);
     default:
       return [];
   }
@@ -153,9 +159,9 @@ interface ResolvedCursor {
  * only needs help when the direct read came back with nothing, which happens
  * when the caret sits in an empty value slot past the end of every node range.
  */
-function resolveCursor(text: string, offset: number): ResolvedCursor | null {
+function resolveCursor(text: string, offset: number, schema: SchemaRoot): ResolvedCursor | null {
   const direct = parsePrototypeFile(text);
-  const directCtx = direct.ok ? cursorContextAt(direct, offset) : null;
+  const directCtx = direct.ok ? contextAt(direct, offset, schema) : null;
   const line = lineAround(text, offset);
 
   const rewrites = line.includes(':')
@@ -168,7 +174,7 @@ function resolveCursor(text: string, offset: number): ResolvedCursor | null {
     if (!rewrite) continue;
     const retry = parsePrototypeFile(rewrite.text);
     if (!retry.ok) continue;
-    const ctx = cursorContextAt(retry, rewrite.offset);
+    const ctx = contextAt(retry, rewrite.offset, schema);
     if (rewrite.expect.includes(ctx.token.kind)) {
       return { ctx, insertPrefix: rewrite.insertPrefix };
     }
@@ -176,6 +182,31 @@ function resolveCursor(text: string, offset: number): ResolvedCursor | null {
 
   return directCtx ? { ctx: directCtx, insertPrefix: '' } : null;
 }
+
+/**
+ * Read the cursor context with this prototype's real component-registry fields.
+ *
+ * `ComponentRegistry` is an ordinary field type, not a structural feature:
+ * `entity` happens to call its registry `components`, but `borgType` calls one
+ * `addComponents` and `antagSpecifier` declares two. So the key set comes from
+ * the schema (`fieldKind === 'componentRegistry'`), never from the name. The
+ * first read only supplies the prototype's `type:`, which is what selects the
+ * key set for the second; both read the same parsed tree, so it costs no parse.
+ */
+function contextAt(file: PrototypeFile, offset: number, schema: SchemaRoot): CursorContext {
+  const first = cursorContextAt(file, offset);
+  const prototype = first.prototypeType === null ? undefined : schema.prototypes[first.prototypeType];
+  if (!prototype) return first;
+
+  const componentRegistryKeys = prototype.fields
+    .filter((field) => field.fieldKind === COMPONENT_REGISTRY_KIND)
+    .map((field) => field.tag);
+
+  return cursorContextAt(file, offset, { componentRegistryKeys });
+}
+
+/** `FieldMetadata.fieldKind` the CLI emits for a `ComponentRegistry`-typed field. */
+const COMPONENT_REGISTRY_KIND = 'componentRegistry';
 
 /**
  * The caret's line, without its terminator. A CRLF file's `\r` is trimmed here
@@ -340,10 +371,17 @@ function fieldKeyCandidates(ctx: CursorContext, schema: SchemaRoot): CompletionC
 }
 
 // ---------------------------------------------------------------------------
-// 5. enum values
+// 5. field values
 // ---------------------------------------------------------------------------
 
-function enumValueCandidates(ctx: CursorContext, schema: SchemaRoot): CompletionCandidate[] {
+/**
+ * Values a field will accept, chosen by its declared `fieldKind` rather than by
+ * anything about its name. Only the kinds whose whole domain is in the schema
+ * can be listed: `boolean`, and the enum-backed `enum` / `flags`. A `protoId`,
+ * `resPath` or `entityProtoId` names something declared elsewhere in the fork,
+ * which this document does not carry, so those stay empty.
+ */
+function valueCandidates(ctx: CursorContext, schema: SchemaRoot): CompletionCandidate[] {
   const container = containerFields(ctx, schema);
   if (!container || ctx.fieldPath.length === 0) return [];
 
@@ -351,13 +389,41 @@ function enumValueCandidates(ctx: CursorContext, schema: SchemaRoot): Completion
   const field = container.fields.find((candidate) => candidate.tag === leafKey);
   if (!field) return [];
 
-  const { values, ref } = enumValuesOf(field, schema);
-  const detail = ref ? shortTypeName(ref) : undefined;
-  return values.map((value) => ({ label: value, kind: 'enum-value' as const, detail }));
+  const { values, detail } = valueChoicesOf(field, schema);
+  return values.map((value) => ({ label: value, kind: 'value' as const, detail }));
+}
+
+const BOOLEAN_VALUES = ['false', 'true'] as const;
+
+/**
+ * The listable domain of a field, read through its list `element` when the field
+ * is a sequence of such values. `detail` names the type the values come from.
+ */
+function valueChoicesOf(
+  field: FieldMetadata,
+  schema: SchemaRoot,
+): { values: readonly string[]; detail: string | undefined } {
+  const kind = field.fieldKind === 'list' ? field.element?.kind : field.fieldKind;
+
+  if (kind === 'boolean') return { values: BOOLEAN_VALUES, detail: 'Boolean' };
+  if (kind !== 'enum' && kind !== 'flags') return { values: [], detail: undefined };
+
+  const inline = field.enumValues ?? field.element?.enumValues;
+  if (inline && inline.length > 0) return { values: [...inline], detail: field.type };
+
+  const ref = field.enumRef ?? field.element?.enumRef;
+  if (ref) {
+    const detail = shortTypeName(ref);
+    if (schema.enums[ref]) return { values: [...schema.enums[ref]], detail };
+    // Numeric named constants — the names are what YAML accepts.
+    const constants = schema.enumConstants[ref];
+    if (constants) return { values: constants.map((entry) => entry.name), detail };
+  }
+  return { values: [], detail: undefined };
 }
 
 // ---------------------------------------------------------------------------
-// container resolution — shared by the field-key and enum-value paths
+// container resolution — shared by the field-key and field-value paths
 // ---------------------------------------------------------------------------
 
 /**
@@ -427,28 +493,6 @@ function fieldDetail(field: FieldMetadata): string {
   return field.required ? `${field.type} (required)` : field.type;
 }
 
-/**
- * Enum members for a field, whether it carries them inline (`enumValues`), by
- * reference into `schema.enums`, or by reference into `schema.enumConstants`
- * (numeric named constants — the names are what YAML accepts). A list-of-enum
- * field is read through its `element`.
- */
-function enumValuesOf(
-  field: FieldMetadata,
-  schema: SchemaRoot,
-): { values: string[]; ref: string | undefined } {
-  const inline = field.enumValues ?? field.element?.enumValues;
-  if (inline && inline.length > 0) return { values: [...inline], ref: undefined };
-
-  const ref = field.enumRef ?? field.element?.enumRef;
-  if (ref) {
-    if (schema.enums[ref]) return { values: [...schema.enums[ref]], ref };
-    const constants = schema.enumConstants[ref];
-    if (constants) return { values: constants.map((entry) => entry.name), ref };
-  }
-  return { values: [], ref: undefined };
-}
-
 // ---------------------------------------------------------------------------
 // shared
 // ---------------------------------------------------------------------------
@@ -457,8 +501,19 @@ function byLabel(a: CompletionCandidate, b: CompletionCandidate): number {
   return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
 }
 
-/** `Content.Shared.Actions.Components.ItemActionIconStyle` -> `ItemActionIconStyle`. */
+/**
+ * The bare class name out of a CLR type name, for a one-word signature:
+ * `Content.Shared.Actions.Components.ItemActionIconStyle` -> `ItemActionIconStyle`.
+ *
+ * Generic types arrive assembly-qualified — ``System.Nullable`1[[Content.Shared.
+ * Inventory.SlotFlags, Content.Shared, Version=…]]`` — where the interesting name
+ * is the first type argument, not the outer wrapper, and splitting on the last
+ * `.` alone lands in the middle of `PublicKeyToken=null]]`.
+ */
 function shortTypeName(fullName: string): string {
-  const lastDot = fullName.lastIndexOf('.');
-  return lastDot === -1 ? fullName : fullName.slice(lastDot + 1);
+  const genericArgs = fullName.indexOf('[[');
+  const name = genericArgs === -1 ? fullName : fullName.slice(genericArgs + 2).split(',')[0];
+  const lastDot = name.lastIndexOf('.');
+  const bare = (lastDot === -1 ? name : name.slice(lastDot + 1)).split('`')[0];
+  return bare || fullName;
 }

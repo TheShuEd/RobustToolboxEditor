@@ -98,7 +98,7 @@ const KIND: Record<CompletionCandidate['kind'], vscode.CompletionItemKind> = {
   prototype: vscode.CompletionItemKind.Struct,
   component: vscode.CompletionItemKind.Class,
   field: vscode.CompletionItemKind.Field,
-  'enum-value': vscode.CompletionItemKind.EnumMember,
+  value: vscode.CompletionItemKind.EnumMember,
 };
 
 function toCompletionItem(candidate: CompletionCandidate): vscode.CompletionItem {
