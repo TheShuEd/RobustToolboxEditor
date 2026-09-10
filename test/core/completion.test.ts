@@ -135,18 +135,32 @@ describe('completionsAt — enum values', () => {
   });
 });
 
-describe('completionsAt — mid-edit (no colon on the caret line yet)', () => {
+/**
+ * Mid-edit positions — a caret line with no `:` on it yet. These run over both
+ * line endings: real fork files on Windows are CRLF, and the whole recovery path
+ * is regex-driven, so a `\r` left on the line silently disables it (issue #27
+ * follow-up — the first cut only ever ran against LF strings).
+ */
+describe.each([
+  ['LF', '\n'],
+  ['CRLF', '\r\n'],
+])('completionsAt — mid-edit, %s', (_name, eol) => {
+  /** Join lines with the EOL under test; the caret goes at the end of the last one. */
+  function atEndOf(lines: readonly string[]): { text: string; offset: number } {
+    const text = lines.join(eol) + eol;
+    return { text, offset: lines.join(eol).length };
+  }
+
   const meleeBlock = [
     '- type: entity',
     '  id: X',
     '  components:',
     '  - type: MeleeWeapon',
     '    attackRate: 1',
-  ].join('\n');
+  ];
 
   it('offers component fields on a half-typed key with no colon', () => {
-    const text = `${meleeBlock}\n    swingL\n`;
-    const offset = text.indexOf('swingL') + 'swingL'.length;
+    const { text, offset } = atEndOf([...meleeBlock, '    swingL']);
 
     const found = completionsAt(text, offset, SCHEMA).map((c) => c.label);
     expect(found).toContain('swingLeft');
@@ -154,8 +168,7 @@ describe('completionsAt — mid-edit (no colon on the caret line yet)', () => {
   });
 
   it('offers component fields on a blank indented line (Ctrl+Space)', () => {
-    const text = `${meleeBlock}\n    \n`;
-    const offset = text.length - 1; // on the blank, indented line
+    const { text, offset } = atEndOf([...meleeBlock, '    ']);
 
     const found = completionsAt(text, offset, SCHEMA).map((c) => c.label);
     expect(found).toEqual(expect.arrayContaining(['swingLeft', 'range', 'damage']));
@@ -163,46 +176,68 @@ describe('completionsAt — mid-edit (no colon on the caret line yet)', () => {
   });
 
   it('offers prototype fields on a blank line at the top level', () => {
-    const text = '- type: reagent\n  id: X\n  \n';
-    const offset = text.length - 1;
-    expect(completionsAt(text, offset, SCHEMA).map((c) => c.label)).toEqual(
-      expect.arrayContaining(['flavor', 'boilingPoint', 'color']),
-    );
+    const { text, offset } = atEndOf(['- type: reagent', '  id: X', '  ']);
+
+    const found = completionsAt(text, offset, SCHEMA).map((c) => c.label);
+    expect(found).toEqual(expect.arrayContaining(['flavor', 'boilingPoint', 'color']));
+    expect(found).not.toContain('id');
   });
 
   it('offers nested DataDefinition fields even when `yaml` mis-parsed the key as a scalar', () => {
     // `damage:` followed by a bare `t` — `yaml` reads it as `damage: "t"`, a
     // valid-looking scalar, so recovery must still kick in off the missing `:`.
-    const text = [
+    const { text, offset } = atEndOf([
       '- type: entity',
       '  id: X',
       '  components:',
       '  - type: MeleeWeapon',
       '    damage:',
       '      t',
-      '',
-    ].join('\n');
-    const offset = text.indexOf('      t') + '      t'.length;
+    ]);
     expect(completionsAt(text, offset, SCHEMA).map((c) => c.label)).toEqual(['types']);
   });
 
   it('does not offer field keys on a sequence-item line', () => {
-    const text = [
+    const { text } = atEndOf([
       '- type: entity',
       '  id: X',
       '  components:',
       '  - type: GuideHelp',
       '    guides:',
       '    - CEMiningGuideEN',
-      '',
-    ].join('\n');
+    ]);
     const offset = text.indexOf('- CEMiningGuideEN') + '- CEMining'.length;
     expect(completionsAt(text, offset, SCHEMA)).toEqual([]);
   });
 
+  it('leaves an existing `key: value` line to the direct parse', () => {
+    const { text } = atEndOf([...meleeBlock, '    swingLeft: true']);
+    const offset = text.indexOf('    swingLeft') + '    swing'.length;
+
+    const found = completionsAt(text, offset, SCHEMA).map((c) => c.label);
+    expect(found).toContain('swingLeft');
+    expect(found).not.toContain('attackRate');
+  });
+
+  it('still offers enum values on a value slot', () => {
+    const { text } = atEndOf([
+      '- type: entity',
+      '  id: X',
+      '  components:',
+      '  - type: Action',
+      '    itemIconStyle: Big',
+    ]);
+    const offset = text.indexOf('itemIconStyle: Big') + 'itemIconStyle: Big'.length;
+    expect(completionsAt(text, offset, SCHEMA).map((c) => c.label).sort()).toEqual([
+      'BigAction',
+      'BigItem',
+      'NoItem',
+    ]);
+  });
+
   it('returns [] when the document is unparseable and the line is not a key', () => {
-    const text = ['- type: entity', '  id: X', '  : : broken', ''].join('\n');
-    expect(completionsAt(text, text.length - 1, SCHEMA)).toEqual([]);
+    const { text, offset } = atEndOf(['- type: entity', '  id: X', '  : : broken']);
+    expect(completionsAt(text, offset, SCHEMA)).toEqual([]);
   });
 });
 

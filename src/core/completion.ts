@@ -117,10 +117,17 @@ function resolveCursor(text: string, offset: number): CursorContext | null {
   return direct.ok ? cursorContextAt(direct, offset) : null;
 }
 
+/**
+ * The caret's line, without its terminator. A CRLF file's `\r` is trimmed here
+ * and left in the text — {@link withSentinelKey} rewrites only up to the `\r`,
+ * so the original line ending survives the patch. Missing this is invisible:
+ * every regex below simply stops matching and recovery silently does nothing.
+ */
 function lineAround(text: string, offset: number): string {
   const start = text.lastIndexOf('\n', offset - 1) + 1;
   const nextNewline = text.indexOf('\n', offset);
-  return text.slice(start, nextNewline === -1 ? text.length : nextNewline);
+  const line = text.slice(start, nextNewline === -1 ? text.length : nextNewline);
+  return line.endsWith('\r') ? line.slice(0, -1) : line;
 }
 
 /**
