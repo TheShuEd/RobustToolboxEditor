@@ -135,35 +135,72 @@ describe('completionsAt — enum values', () => {
   });
 });
 
-describe('completionsAt — half-typed key with no colon yet', () => {
-  it('recovers a bare key line so field completion still fires mid-edit', () => {
-    // `swingL` with no `:` — `yaml` rejects the whole document; the core splices
-    // a colon onto that line and re-parses.
+describe('completionsAt — mid-edit (no colon on the caret line yet)', () => {
+  const meleeBlock = [
+    '- type: entity',
+    '  id: X',
+    '  components:',
+    '  - type: MeleeWeapon',
+    '    attackRate: 1',
+  ].join('\n');
+
+  it('offers component fields on a half-typed key with no colon', () => {
+    const text = `${meleeBlock}\n    swingL\n`;
+    const offset = text.indexOf('swingL') + 'swingL'.length;
+
+    const found = completionsAt(text, offset, SCHEMA).map((c) => c.label);
+    expect(found).toContain('swingLeft');
+    expect(found).not.toContain('attackRate'); // sibling already written
+  });
+
+  it('offers component fields on a blank indented line (Ctrl+Space)', () => {
+    const text = `${meleeBlock}\n    \n`;
+    const offset = text.length - 1; // on the blank, indented line
+
+    const found = completionsAt(text, offset, SCHEMA).map((c) => c.label);
+    expect(found).toEqual(expect.arrayContaining(['swingLeft', 'range', 'damage']));
+    expect(found).not.toContain('attackRate');
+  });
+
+  it('offers prototype fields on a blank line at the top level', () => {
+    const text = '- type: reagent\n  id: X\n  \n';
+    const offset = text.length - 1;
+    expect(completionsAt(text, offset, SCHEMA).map((c) => c.label)).toEqual(
+      expect.arrayContaining(['flavor', 'boilingPoint', 'color']),
+    );
+  });
+
+  it('offers nested DataDefinition fields even when `yaml` mis-parsed the key as a scalar', () => {
+    // `damage:` followed by a bare `t` — `yaml` reads it as `damage: "t"`, a
+    // valid-looking scalar, so recovery must still kick in off the missing `:`.
     const text = [
       '- type: entity',
       '  id: X',
       '  components:',
       '  - type: MeleeWeapon',
-      '    attackRate: 1',
-      '    swingL',
+      '    damage:',
+      '      t',
       '',
     ].join('\n');
-    const offset = text.indexOf('swingL') + 'swingL'.length;
-
-    const found = completionsAt(text, offset, SCHEMA).map((c) => c.label);
-    expect(found).toContain('swingLeft');
-    // sibling already written in the block is still excluded
-    expect(found).not.toContain('attackRate');
+    const offset = text.indexOf('      t') + '      t'.length;
+    expect(completionsAt(text, offset, SCHEMA).map((c) => c.label)).toEqual(['types']);
   });
 
-  it('recovers a bare key at the top level of a prototype', () => {
-    const text = ['- type: reagent', '  id: X', '  fla', ''].join('\n');
-    const offset = text.indexOf('  fla') + '  fla'.length;
-
-    expect(completionsAt(text, offset, SCHEMA).map((c) => c.label)).toContain('flavor');
+  it('does not offer field keys on a sequence-item line', () => {
+    const text = [
+      '- type: entity',
+      '  id: X',
+      '  components:',
+      '  - type: GuideHelp',
+      '    guides:',
+      '    - CEMiningGuideEN',
+      '',
+    ].join('\n');
+    const offset = text.indexOf('- CEMiningGuideEN') + '- CEMining'.length;
+    expect(completionsAt(text, offset, SCHEMA)).toEqual([]);
   });
 
-  it('returns [] when the document is unparseable and not a bare-key line', () => {
+  it('returns [] when the document is unparseable and the line is not a key', () => {
     const text = ['- type: entity', '  id: X', '  : : broken', ''].join('\n');
     expect(completionsAt(text, text.length - 1, SCHEMA)).toEqual([]);
   });

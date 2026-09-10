@@ -22,18 +22,23 @@
  * YAML `type:` string and components by their registration name, which is what
  * the cursor context hands us.
  *
- * A half-typed key with no colon yet (`swingL`, mid-edit) makes `yaml` reject
- * the whole document — issue #24's "any parse error => invalid as a whole". So
- * before giving up, {@link completionsAt} splices a `:` onto that line and
- * re-parses: the exact case where field completion is most wanted.
+ * ## Mid-edit recovery
+ *
+ * A key being typed almost never sits in a well-formed tree. A bare word with no
+ * colon (`shader`) either makes `yaml` reject the document or — worse — parses
+ * as the *scalar value* of the line above (`damage:\n  wei` => `damage: "wei"`),
+ * so the document looks valid but the tree is wrong. A blank new line falls
+ * outside every node, so there is no context at all.
+ *
+ * So whenever the caret line carries no `:` (a key-in-progress or a blank line),
+ * {@link completionsAt} rewrites that line to `<indent><partial><sentinel>:` and
+ * parses that instead. The indent places the caret in the right block; the
+ * sentinel guarantees a key distinct from every real sibling, so all of them are
+ * excluded from the suggestions, and nothing from the patched text can leak into
+ * a candidate (labels come only from the schema).
  */
 
-import {
-  cursorContextAt,
-  parsePrototypeFile,
-  type CursorContext,
-  type PrototypeFile,
-} from './prototype-yaml';
+import { cursorContextAt, parsePrototypeFile, type CursorContext } from './prototype-yaml';
 import type {
   DataDefinitionMetadata,
   FieldMetadata,
@@ -61,10 +66,8 @@ export function completionsAt(
   offset: number,
   schema: SchemaRoot,
 ): CompletionCandidate[] {
-  const parsed = parseForCompletion(text, offset);
-  if (!parsed) return [];
-
-  const ctx = cursorContextAt(parsed.file, parsed.offset);
+  const ctx = resolveCursor(text, offset);
+  if (!ctx) return [];
 
   switch (ctx.token.kind) {
     case 'component-type':
@@ -79,43 +82,68 @@ export function completionsAt(
 }
 
 // ---------------------------------------------------------------------------
-// parse, with bare-key recovery
+// cursor context, with mid-edit recovery
 // ---------------------------------------------------------------------------
 
 /**
- * Parse `text`, and if that fails, retry once with a `:` spliced onto the
- * caret's line when it holds nothing but an indented bare word — the shape a
- * field key has the instant before its colon is typed. The returned `offset` is
- * shifted past the inserted colon when the caret was beyond it.
+ * A key `yaml` will never confuse with a real one, low-sorting and dotless so a
+ * partial like `sha` + sentinel still reads as one plain key.
  */
-function parseForCompletion(
-  text: string,
-  offset: number,
-): { file: PrototypeFile; offset: number } | null {
+const KEY_SENTINEL = 'zzzss14completionzzz';
+
+/** `<indent>` then an optional partial key, with no `:` anywhere on the line. */
+const KEY_IN_PROGRESS = /^([ \t]*)([A-Za-z0-9_.-]*)[ \t]*$/;
+
+/**
+ * The cursor context for `offset`, applying the mid-edit recovery from this
+ * module's header when the caret line has no `:` on it. `null` only when the
+ * text cannot be parsed at all.
+ */
+function resolveCursor(text: string, offset: number): CursorContext | null {
   const direct = parsePrototypeFile(text);
-  if (direct.ok) return { file: direct, offset };
 
-  const patched = spliceBareKeyColon(text, offset);
-  if (!patched) return null;
+  const line = lineAround(text, offset);
+  if (!line.includes(':')) {
+    const recovered = withSentinelKey(text, offset, line);
+    if (recovered) {
+      const retry = parsePrototypeFile(recovered.text);
+      if (retry.ok) {
+        const ctx = cursorContextAt(retry, recovered.offset);
+        if (ctx.token.kind === 'key') return ctx;
+      }
+    }
+  }
 
-  const retry = parsePrototypeFile(patched.text);
-  return retry.ok ? { file: retry, offset: patched.offset } : null;
+  return direct.ok ? cursorContextAt(direct, offset) : null;
 }
 
-const BARE_KEY_LINE = /^([ \t]*)([A-Za-z0-9_.-]+)[ \t]*$/;
-
-function spliceBareKeyColon(text: string, offset: number): { text: string; offset: number } | null {
-  const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
+function lineAround(text: string, offset: number): string {
+  const start = text.lastIndexOf('\n', offset - 1) + 1;
   const nextNewline = text.indexOf('\n', offset);
-  const lineEnd = nextNewline === -1 ? text.length : nextNewline;
+  return text.slice(start, nextNewline === -1 ? text.length : nextNewline);
+}
 
-  const match = BARE_KEY_LINE.exec(text.slice(lineStart, lineEnd));
+/**
+ * Rewrite the caret line to `<indent><partial><sentinel>:` and report the offset
+ * to read the context at (the boundary between the user's partial and the
+ * sentinel). `null` when the line is not a key-in-progress shape.
+ */
+function withSentinelKey(
+  text: string,
+  offset: number,
+  line: string,
+): { text: string; offset: number } | null {
+  const match = KEY_IN_PROGRESS.exec(line);
   if (!match) return null;
 
-  const insertAt = lineStart + match[1].length + match[2].length;
+  const [, indent, partial] = match;
+  const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
+  const lineEnd = lineStart + line.length;
+  const rewritten = `${indent}${partial}${KEY_SENTINEL}:`;
+
   return {
-    text: `${text.slice(0, insertAt)}:${text.slice(insertAt)}`,
-    offset: offset > insertAt ? offset + 1 : offset,
+    text: text.slice(0, lineStart) + rewritten + text.slice(lineEnd),
+    offset: lineStart + indent.length + partial.length,
   };
 }
 
