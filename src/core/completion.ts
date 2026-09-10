@@ -7,7 +7,7 @@
  *
  * The cursor context is entirely {@link cursorContextAt}'s job (issue #24) — this
  * module never walks the YAML tree itself. From that context it decides which of
- * five lists the caret is asking for:
+ * six lists the caret is asking for:
  *
  *   1. component names   — on the `type:` value slot of a `components:` entry;
  *   2. component fields  — on a key inside a component block;
@@ -15,7 +15,9 @@
  *   4. prototype fields  — on a key at the top level of the prototype, keyed by
  *      its `[Prototype]` type (`entity` -> `EntityPrototype`, `reagent` ->
  *      `ReagentPrototype`, …);
- *   5. enum values       — on the value slot of an enum-typed field.
+ *   5. enum values       — on the value slot of an enum-typed field;
+ *   6. prototype types   — on the `type:` value slot of the prototype itself,
+ *      one level out from (1).
  *
  * Cases 2–4 exclude keys already written in the caret's block
  * ({@link CursorContext.containerKeys}). The schema keys prototypes by their
@@ -24,18 +26,28 @@
  *
  * ## Mid-edit recovery
  *
- * A key being typed almost never sits in a well-formed tree. A bare word with no
- * colon (`shader`) either makes `yaml` reject the document or — worse — parses
- * as the *scalar value* of the line above (`damage:\n  wei` => `damage: "wei"`),
- * so the document looks valid but the tree is wrong. A blank new line falls
- * outside every node, so there is no context at all.
+ * A caret being typed at almost never sits in a well-formed tree, and `yaml`'s
+ * failure modes here are all silent:
  *
- * So whenever the caret line carries no `:` (a key-in-progress or a blank line),
- * {@link completionsAt} rewrites that line to `<indent><partial><sentinel>:` and
- * parses that instead. The indent places the caret in the right block; the
- * sentinel guarantees a key distinct from every real sibling, so all of them are
- * excluded from the suggestions, and nothing from the patched text can leak into
- * a candidate (labels come only from the schema).
+ *   - a bare word with no colon (`shader`) either makes `yaml` reject the
+ *     document or — worse — parses as the *scalar value* of the line above
+ *     (`damage:` + `wei` => `damage: "wei"`), valid-looking but wrong;
+ *   - a blank line, and an empty value slot (`type: ` with nothing after it),
+ *     sit past the end of every node range, so there is no context at all;
+ *   - a bare `- ` is a sequence marker, not a key — reading it as one lands the
+ *     caret on the *enclosing* map and answers with that map's fields.
+ *
+ * So {@link completionsAt} rewrites the caret line and parses that instead:
+ * `<indent><partial><sentinel>:` for a key in progress, `<indent>- type:
+ * <sentinel>` for a bare `- `, and `<key>: <sentinel>` for an empty value slot.
+ * The indent places the caret in the right block; the sentinel is a real token,
+ * so the caret falls inside a node range, and it is distinct from every written
+ * sibling, so all of them are excluded from the suggestions. Nothing from the
+ * patched text reaches a candidate — labels come only from the schema.
+ *
+ * Where the rewrite had to invent the `type:` key (the bare `- ` case), the
+ * candidates carry it back as {@link CompletionCandidate.insertText}, so picking
+ * one writes the key the document is still missing.
  */
 
 import { cursorContextAt, parsePrototypeFile, type CursorContext } from './prototype-yaml';
@@ -48,11 +60,17 @@ import type {
 
 /** One completion candidate as data: what to show, how to badge it, a short signature. */
 export interface CompletionCandidate {
-  /** The text inserted / shown — a component name, a field key, or an enum member. */
+  /** The name shown in the list — a prototype/component name, a field key, an enum member. */
   readonly label: string;
-  readonly kind: 'component' | 'field' | 'enum-value';
+  readonly kind: 'prototype' | 'component' | 'field' | 'enum-value';
   /** Short right-aligned signature: a declared type, a class name, or an enum type. */
   readonly detail?: string;
+  /**
+   * Text to insert when it differs from {@link label} — set only where the caret
+   * sits on a bare `- ` and the `type:` key it needs is still missing, so picking
+   * `Clothing` writes `type: Clothing`, not `Clothing`.
+   */
+  readonly insertText?: string;
 }
 
 /**
@@ -66,19 +84,32 @@ export function completionsAt(
   offset: number,
   schema: SchemaRoot,
 ): CompletionCandidate[] {
-  const ctx = resolveCursor(text, offset);
-  if (!ctx) return [];
+  const resolved = resolveCursor(text, offset);
+  if (!resolved) return [];
+  const { ctx, insertPrefix } = resolved;
 
   switch (ctx.token.kind) {
     case 'component-type':
-      return componentNameCandidates(schema);
+      return componentNameCandidates(schema, insertPrefix);
     case 'key':
       return fieldKeyCandidates(ctx, schema);
     case 'value':
-      return enumValueCandidates(ctx, schema);
+      return onPrototypeTypeSlot(ctx)
+        ? prototypeNameCandidates(schema, insertPrefix)
+        : enumValueCandidates(ctx, schema);
     default:
       return [];
   }
+}
+
+/**
+ * True on the value slot of a prototype's own `type:` — the sibling of the
+ * component-name point, one level out. `cursorContextAt` reports a component's
+ * `type:` as its own `component-type` token, so a plain `type` value token on
+ * the prototype map can only be this.
+ */
+function onPrototypeTypeSlot(ctx: CursorContext): boolean {
+  return ctx.component === null && ctx.fieldPath.length === 1 && ctx.fieldPath[0] === 'type';
 }
 
 // ---------------------------------------------------------------------------
@@ -91,30 +122,59 @@ export function completionsAt(
  */
 const KEY_SENTINEL = 'zzzss14completionzzz';
 
-/** `<indent>` then an optional partial key, with no `:` anywhere on the line. */
-const KEY_IN_PROGRESS = /^([ \t]*)([A-Za-z0-9_.-]*)[ \t]*$/;
+/**
+ * `<indent>` then an optional partial key, with no `:` anywhere on the line.
+ * A key may not *start* with `-`: that is a sequence marker, and letting it in
+ * turned a bare `  - ` into a key on the prototype map, which then answered with
+ * the prototype's own fields.
+ */
+const KEY_IN_PROGRESS = /^([ \t]*)((?:[A-Za-z0-9_.][A-Za-z0-9_.-]*)?)[ \t]*$/;
+
+/** `<indent>-` and nothing else: a sequence item whose first key is not typed yet. */
+const SEQ_ITEM_START = /^([ \t]*)-([ \t]*)$/;
+
+/** A written `key:` with an empty value slot after it — `- type: ` included. */
+const EMPTY_VALUE_SLOT = /^(.*:)([ \t]*)$/;
+
+/** What the caret line was rewritten to, if anything, so candidates can match it. */
+interface ResolvedCursor {
+  readonly ctx: CursorContext;
+  /** Prepended to a candidate's insert text when the recovery synthesized `type:`. */
+  readonly insertPrefix: string;
+}
 
 /**
  * The cursor context for `offset`, applying the mid-edit recovery from this
- * module's header when the caret line has no `:` on it. `null` only when the
- * text cannot be parsed at all.
+ * module's header. `null` only when the text cannot be parsed at all.
+ *
+ * A caret line with no `:` is always a key-or-item in progress, so it is
+ * rewritten even when the document happens to parse — that is the case `yaml`
+ * silently reads as the previous line's scalar. A line that does have its `:`
+ * only needs help when the direct read came back with nothing, which happens
+ * when the caret sits in an empty value slot past the end of every node range.
  */
-function resolveCursor(text: string, offset: number): CursorContext | null {
+function resolveCursor(text: string, offset: number): ResolvedCursor | null {
   const direct = parsePrototypeFile(text);
-
+  const directCtx = direct.ok ? cursorContextAt(direct, offset) : null;
   const line = lineAround(text, offset);
-  if (!line.includes(':')) {
-    const recovered = withSentinelKey(text, offset, line);
-    if (recovered) {
-      const retry = parsePrototypeFile(recovered.text);
-      if (retry.ok) {
-        const ctx = cursorContextAt(retry, recovered.offset);
-        if (ctx.token.kind === 'key') return ctx;
-      }
+
+  const rewrites = line.includes(':')
+    ? directCtx === null || directCtx.token.kind === 'none'
+      ? [withValueSentinel(text, offset, line)]
+      : []
+    : [withTypeKey(text, offset, line), withSentinelKey(text, offset, line)];
+
+  for (const rewrite of rewrites) {
+    if (!rewrite) continue;
+    const retry = parsePrototypeFile(rewrite.text);
+    if (!retry.ok) continue;
+    const ctx = cursorContextAt(retry, rewrite.offset);
+    if (rewrite.expect.includes(ctx.token.kind)) {
+      return { ctx, insertPrefix: rewrite.insertPrefix };
     }
   }
 
-  return direct.ok ? cursorContextAt(direct, offset) : null;
+  return directCtx ? { ctx: directCtx, insertPrefix: '' } : null;
 }
 
 /**
@@ -130,27 +190,94 @@ function lineAround(text: string, offset: number): string {
   return line.endsWith('\r') ? line.slice(0, -1) : line;
 }
 
+/** One candidate rewrite of the caret line, and the tokens that confirm it landed. */
+interface Rewrite {
+  readonly text: string;
+  readonly offset: number;
+  /** Token kinds that mean the rewrite put the caret where it was meant to go. */
+  readonly expect: readonly CursorContext['token']['kind'][];
+  readonly insertPrefix: string;
+}
+
+/** Offset of the start of the line `offset` sits on. */
+function lineStartAt(text: string, offset: number): number {
+  return text.lastIndexOf('\n', offset - 1) + 1;
+}
+
 /**
  * Rewrite the caret line to `<indent><partial><sentinel>:` and report the offset
  * to read the context at (the boundary between the user's partial and the
  * sentinel). `null` when the line is not a key-in-progress shape.
  */
-function withSentinelKey(
-  text: string,
-  offset: number,
-  line: string,
-): { text: string; offset: number } | null {
+function withSentinelKey(text: string, offset: number, line: string): Rewrite | null {
   const match = KEY_IN_PROGRESS.exec(line);
   if (!match) return null;
 
   const [, indent, partial] = match;
-  const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
-  const lineEnd = lineStart + line.length;
+  const start = lineStartAt(text, offset);
   const rewritten = `${indent}${partial}${KEY_SENTINEL}:`;
 
   return {
-    text: text.slice(0, lineStart) + rewritten + text.slice(lineEnd),
-    offset: lineStart + indent.length + partial.length,
+    text: text.slice(0, start) + rewritten + text.slice(start + line.length),
+    offset: start + indent.length + partial.length,
+    expect: ['key'],
+    insertPrefix: '',
+  };
+}
+
+/**
+ * A bare `- ` starts a sequence item whose first key is always `type:` — a new
+ * component under `components:`, or a new prototype at the top level. Rewrite it
+ * to `<indent>- type: ` and read the context at that value slot, so the caret
+ * lands on the existing component-name / prototype-name point instead of on a
+ * key of the enclosing map. The `type: ` it borrows is not in the document, so
+ * candidates carry it as their insert prefix.
+ */
+function withTypeKey(text: string, offset: number, line: string): Rewrite | null {
+  const match = SEQ_ITEM_START.exec(line);
+  if (!match) return null;
+
+  const [, indent, gap] = match;
+  const start = lineStartAt(text, offset);
+  // The sentinel is a real scalar, so the value node has a range the caret can
+  // fall inside; an empty `type: ` slot ends before the caret and reads as
+  // outside every node.
+  const rewritten = `${indent}- type: ${KEY_SENTINEL}`;
+
+  return {
+    text: text.slice(0, start) + rewritten + text.slice(start + line.length),
+    offset: rewritten.length - KEY_SENTINEL.length + start,
+    // Inside `components:` the caret lands on the component-name point; at the
+    // top level of the file the same slot is the prototype's own `type:` value.
+    expect: ['component-type', 'value'],
+    // `-Clothing` would be broken YAML, so re-supply the space the user has not
+    // typed yet when the caret still sits right against the dash.
+    insertPrefix: gap.length > 0 ? 'type: ' : ' type: ',
+  };
+}
+
+/**
+ * The caret sits in an empty value slot (`type: ` with nothing after it). That
+ * offset is past the end of every node range, so a direct read finds no context
+ * at all. Park a sentinel scalar in the slot to give the value a range the caret
+ * falls inside; only its position is ever used.
+ */
+function withValueSentinel(text: string, offset: number, line: string): Rewrite | null {
+  const match = EMPTY_VALUE_SLOT.exec(line);
+  if (!match) return null;
+
+  const [, upToColon, gap] = match;
+  const start = lineStartAt(text, offset);
+  if (offset < start + upToColon.length) return null; // caret is on the key, not the slot
+
+  const spacing = gap.length > 0 ? gap : ' ';
+  const rewritten = upToColon + spacing + KEY_SENTINEL;
+
+  return {
+    text: text.slice(0, start) + rewritten + text.slice(start + line.length),
+    offset: start + upToColon.length + spacing.length,
+    expect: ['component-type', 'value'],
+    insertPrefix: '',
   };
 }
 
@@ -158,14 +285,37 @@ function withSentinelKey(
 // 1. component names
 // ---------------------------------------------------------------------------
 
-function componentNameCandidates(schema: SchemaRoot): CompletionCandidate[] {
+function componentNameCandidates(schema: SchemaRoot, insertPrefix: string): CompletionCandidate[] {
   return Object.values(schema.components)
-    .map((component) => ({
-      label: component.name,
-      kind: 'component' as const,
-      detail: shortTypeName(component.className),
-    }))
+    .map((component) =>
+      named(component.name, 'component', shortTypeName(component.className), insertPrefix),
+    )
     .sort(byLabel);
+}
+
+/**
+ * The `type:` values a prototype document can carry — `entity`, `reagent`,
+ * `jobIcon`, … — keyed in the schema by exactly that string.
+ */
+function prototypeNameCandidates(schema: SchemaRoot, insertPrefix: string): CompletionCandidate[] {
+  return Object.values(schema.prototypes)
+    .filter((prototype) => prototype.yamlType.length > 0)
+    .map((prototype) =>
+      named(prototype.yamlType, 'prototype', shortTypeName(prototype.className), insertPrefix),
+    )
+    .sort(byLabel);
+}
+
+/** A name candidate, carrying an insert text only when the recovery synthesized `type:`. */
+function named(
+  label: string,
+  kind: 'prototype' | 'component',
+  detail: string,
+  insertPrefix: string,
+): CompletionCandidate {
+  return insertPrefix
+    ? { label, kind, detail, insertText: `${insertPrefix}${label}` }
+    : { label, kind, detail };
 }
 
 // ---------------------------------------------------------------------------

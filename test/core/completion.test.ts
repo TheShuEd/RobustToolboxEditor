@@ -239,6 +239,88 @@ describe.each([
     const { text, offset } = atEndOf(['- type: entity', '  id: X', '  : : broken']);
     expect(completionsAt(text, offset, SCHEMA)).toEqual([]);
   });
+
+  it('offers component names on a bare `- `, inserting the `type:` it still needs', () => {
+    const { text, offset } = atEndOf([...meleeBlock, '  - ']);
+
+    const candidates = completionsAt(text, offset, SCHEMA);
+    const sprite = candidates.find((c) => c.label === 'Sprite');
+    expect(sprite).toEqual({
+      label: 'Sprite',
+      kind: 'component',
+      detail: 'SpriteComponent',
+      insertText: 'type: Sprite',
+    });
+    expect(candidates.every((c) => c.kind === 'component')).toBe(true);
+  });
+
+  it('re-supplies the space when the caret sits right against the dash', () => {
+    const { text, offset } = atEndOf([...meleeBlock, '  -']);
+    const sprite = completionsAt(text, offset, SCHEMA).find((c) => c.label === 'Sprite');
+    expect(sprite?.insertText).toBe(' type: Sprite');
+  });
+
+  it('offers prototype types on a bare `- ` at the top level', () => {
+    const { text, offset } = atEndOf(['- type: entity', '  id: X', '', '- ']);
+
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates.map((c) => c.label)).toEqual(expect.arrayContaining(['entity', 'reagent']));
+    expect(candidates.every((c) => c.kind === 'prototype')).toBe(true);
+    expect(candidates.find((c) => c.label === 'reagent')?.insertText).toBe('type: reagent');
+  });
+
+  it('does not offer anything on a bare `- ` in a scalar sequence', () => {
+    const { text, offset } = atEndOf([
+      '- type: entity',
+      '  id: X',
+      '  components:',
+      '  - type: GuideHelp',
+      '    guides:',
+      '    - CEMiningGuideEN',
+      '    - ',
+    ]);
+    expect(completionsAt(text, offset, SCHEMA)).toEqual([]);
+  });
+});
+
+/**
+ * The `type:` value of the prototype itself — the sibling of the component-name
+ * point, one level out. Its empty-slot form (`- type: ` with nothing after)
+ * needs the same recovery: that offset is past the end of every node range.
+ */
+describe.each([
+  ['LF', '\n'],
+  ['CRLF', '\r\n'],
+])('completionsAt — prototype types, %s', (_name, eol) => {
+  it('offers prototype types on a half-typed `- type: ent`', () => {
+    const text = ['- type: entity', '  id: X', '', '- type: ent'].join(eol) + eol;
+    const offset = text.lastIndexOf('ent') + 'ent'.length;
+
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates.map((c) => c.label)).toEqual(expect.arrayContaining(['entity', 'reagent']));
+    expect(candidates.every((c) => c.kind === 'prototype')).toBe(true);
+    // The author already typed `type: `, so the label inserts as-is.
+    expect(candidates.every((c) => c.insertText === undefined)).toBe(true);
+  });
+
+  it('offers prototype types on an empty `- type: ` slot', () => {
+    const text = ['- type: entity', '  id: X', '', '- type: '].join(eol) + eol;
+    const offset = text.length - eol.length;
+
+    expect(completionsAt(text, offset, SCHEMA).map((c) => c.label)).toEqual(
+      expect.arrayContaining(['entity', 'reagent', 'jobIcon']),
+    );
+  });
+
+  it('still offers component names on an empty `type: ` slot inside components:', () => {
+    const text =
+      ['- type: entity', '  id: X', '  components:', '  - type: '].join(eol) + eol;
+    const offset = text.length - eol.length;
+
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates.map((c) => c.label)).toEqual(expect.arrayContaining(['Sprite', 'MeleeWeapon']));
+    expect(candidates.every((c) => c.kind === 'component')).toBe(true);
+  });
 });
 
 describe('completionsAt — nothing to offer', () => {

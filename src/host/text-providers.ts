@@ -95,6 +95,7 @@ export class PrototypeCompletionProvider implements vscode.CompletionItemProvide
 }
 
 const KIND: Record<CompletionCandidate['kind'], vscode.CompletionItemKind> = {
+  prototype: vscode.CompletionItemKind.Struct,
   component: vscode.CompletionItemKind.Class,
   field: vscode.CompletionItemKind.Field,
   'enum-value': vscode.CompletionItemKind.EnumMember,
@@ -103,5 +104,11 @@ const KIND: Record<CompletionCandidate['kind'], vscode.CompletionItemKind> = {
 function toCompletionItem(candidate: CompletionCandidate): vscode.CompletionItem {
   const item = new vscode.CompletionItem(candidate.label, KIND[candidate.kind]);
   if (candidate.detail) item.detail = candidate.detail;
+  // Set only where the core had to synthesize the `type:` key the caret needs;
+  // `filterText` keeps the bare name matching what the author actually types.
+  if (candidate.insertText) {
+    item.insertText = candidate.insertText;
+    item.filterText = candidate.label;
+  }
   return item;
 }
